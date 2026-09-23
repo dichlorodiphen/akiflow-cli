@@ -23,6 +23,7 @@ git clone https://github.com/dichlorodiphen/akiflow-cli.git
 cd akiflow-cli
 bun install
 bun run build
+mkdir -p ~/.local/bin
 install -m 0755 ./af ~/.local/bin/af
 ```
 
