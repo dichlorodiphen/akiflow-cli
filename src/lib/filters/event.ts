@@ -18,9 +18,20 @@ export interface EventFilter {
 }
 
 export function filterEvents(events: Event[], f: EventFilter): Event[] {
+	// Recurring series masters are flagged hidden=true, but the master doubles
+	// as the series' first occurrence: it is a real calendar entry unless a
+	// visible (non-hidden) instance already covers the same slot. That happens
+	// when a series is edited and Akiflow materializes an instance at the
+	// anchor time — showing both would duplicate the occurrence.
+	const coveredSlots = new Set<string>();
+	for (const e of events) {
+		if (e.deleted_at != null || e.hidden) continue;
+		if (e.recurring_id) coveredSlots.add(recurrenceSlotKey(e));
+	}
+
 	return events.filter((e) => {
 		if (e.deleted_at != null) return false;
-		if (e.hidden) return false;
+		if (e.hidden && !isUncoveredSeriesMaster(e, coveredSlots)) return false;
 		if (!f.includeDeclined && e.declined) return false;
 		if (f.activeCalendarIds && !f.activeCalendarIds.has(e.calendar_id)) {
 			return false;
@@ -43,6 +54,26 @@ export function filterEvents(events: Event[], f: EventFilter): Event[] {
 		if (f.connector && e.connector_id !== f.connector) return false;
 		return true;
 	});
+}
+
+function recurrenceSlotKey(e: Event): string {
+	return `${e.recurring_id}|${e.start_time ?? e.start_date ?? ""}`;
+}
+
+/**
+ * A hidden event that is a recurring series master (recurring_id === id)
+ * whose anchor slot has no visible instance covering it. The master carries
+ * the series' first occurrence, so it must be shown; otherwise the first
+ * meeting of every recurring series silently disappears from the calendar.
+ */
+function isUncoveredSeriesMaster(
+	e: Event,
+	coveredSlots: Set<string>,
+): boolean {
+	if (!e.hidden) return false;
+	const rid = e.recurring_id;
+	if (!rid || rid !== e.id) return false;
+	return !coveredSlots.has(recurrenceSlotKey(e));
 }
 
 function eventIntersectsRange(e: Event, from: Date, to: Date): boolean {
