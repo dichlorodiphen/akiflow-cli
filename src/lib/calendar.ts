@@ -40,24 +40,27 @@ export function isGoogleCalendar(calendar: Calendar): boolean {
 export function findDefaultWritablePrimaryCalendar(
 	calendars: Calendar[],
 ): Calendar | null {
+	const writable = calendars.filter(isWritableVisibleCalendar);
+	// Prefer Akiflow's own primary calendar; `primary` is per-account in Google
+	// and can be true on several calendars, making plain `.find()` order-dependent.
 	return (
-		calendars.find(
-			(calendar) =>
-				isWritableVisibleCalendar(calendar) && isPrimaryCalendar(calendar),
-		) ?? null
+		writable.find((calendar) => calendar.akiflow_primary === true) ??
+		writable.find(isPrimaryCalendar) ??
+		null
 	);
 }
 
 export function findDefaultEventCalendar(
 	calendars: Calendar[],
 ): Calendar | null {
+	const writableGoogle = calendars.filter(
+		(calendar) =>
+			isWritableVisibleCalendar(calendar) && isGoogleCalendar(calendar),
+	);
 	return (
-		calendars.find(
-			(calendar) =>
-				isWritableVisibleCalendar(calendar) &&
-				isPrimaryCalendar(calendar) &&
-				isGoogleCalendar(calendar),
-		) ?? null
+		writableGoogle.find((calendar) => calendar.akiflow_primary === true) ??
+		writableGoogle.find(isPrimaryCalendar) ??
+		null
 	);
 }
 

@@ -98,9 +98,34 @@ export async function refresh(
 				pages: result.pages,
 			};
 		}
+		// A successful delta refresh leaves every resource fully synced, so the
+		// cache is fresh as of now (previously only rebuild() stamped this,
+		// which kept every readResource() perpetually "stale").
+		tokens.last_full_sync_at = new Date().toISOString();
 		await writeTokens(tokens);
 		return summary;
 	});
+}
+
+/**
+ * Module-level in-flight refresh promise. Commands like `af cal` read
+ * several resources concurrently via Promise.all; without sharing, each
+ * readResource() would trigger its own refresh() and the losers would die
+ * after ~10s with "could not acquire ... .lock". Concurrent callers share
+ * one refresh instead of racing for the cache lock.
+ */
+let inflightRefresh: Promise<Record<Resource, ResourceSyncSummary>> | null =
+	null;
+
+function sharedRefresh(
+	client: CacheClient,
+): Promise<Record<Resource, ResourceSyncSummary>> {
+	if (!inflightRefresh) {
+		inflightRefresh = refresh(client).finally(() => {
+			inflightRefresh = null;
+		});
+	}
+	return inflightRefresh;
 }
 
 /**
@@ -148,7 +173,7 @@ export async function readResource<T>(
 	const hasToken = tokens[resource] != null;
 	const stale = shouldAutoRefresh(tokens);
 	if ((!hasToken || stale) && !process.env.AF_NO_AUTO_SYNC) {
-		await refresh(client);
+		await sharedRefresh(client);
 	}
 	return readAllRecords<T>(cacheFile(`${resource}.jsonl`));
 }

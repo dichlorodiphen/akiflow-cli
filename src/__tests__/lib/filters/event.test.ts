@@ -80,6 +80,68 @@ describe("filterEvents", () => {
 		expect(filterEvents(events, {}).map((e) => e.id)).toEqual(["visible"]);
 	});
 
+	test("hidden recurring series master is shown when no instance covers its slot", () => {
+		// Akiflow flags series masters hidden=true; the master doubles as the
+		// series' first occurrence (recurring_id === id).
+		const events = [
+			ev({
+				id: "master",
+				hidden: true,
+				recurring_id: "master",
+				start_time: "2026-09-25T21:30:00Z",
+				end_time: "2026-09-25T21:55:00Z",
+			}),
+			ev({
+				id: "instance-oct2",
+				recurring_id: "master",
+				start_time: "2026-10-02T21:30:00Z",
+				end_time: "2026-10-02T21:55:00Z",
+			}),
+		];
+
+		expect(
+			filterEvents(events, {
+				from: new Date("2026-09-25T00:00:00Z"),
+				to: new Date("2026-09-25T23:59:59Z"),
+			}).map((e) => e.id),
+		).toEqual(["master"]);
+	});
+
+	test("hidden series master is skipped when a visible instance covers its slot", () => {
+		const events = [
+			ev({
+				id: "master",
+				hidden: true,
+				recurring_id: "master",
+				start_time: "2026-09-25T21:30:00Z",
+				end_time: "2026-09-25T21:55:00Z",
+			}),
+			ev({
+				id: "instance-sep25",
+				recurring_id: "master",
+				start_time: "2026-09-25T21:30:00Z",
+				end_time: "2026-09-25T21:55:00Z",
+			}),
+		];
+
+		expect(filterEvents(events, {}).map((e) => e.id)).toEqual([
+			"instance-sep25",
+		]);
+	});
+
+	test("hidden non-master events stay hidden", () => {
+		const events = [
+			ev({
+				id: "hidden-instance",
+				hidden: true,
+				recurring_id: "some-series",
+				start_time: "2026-09-25T21:30:00Z",
+			}),
+		];
+
+		expect(filterEvents(events, {})).toEqual([]);
+	});
+
 	test("excludes hidden calendars by default", () => {
 		const events = [
 			ev({ id: "visible", calendar_id: "visible-cal" }),
