@@ -11,7 +11,7 @@ import type {
 	TimeSlot,
 } from "../api/types";
 import { cacheFile, cachePath } from "../platform-config";
-import { readAllRecords } from "./jsonl-store";
+import { readAllRecords, upsertRecords } from "./jsonl-store";
 import { withLock } from "./lock";
 import { syncResource } from "./sync";
 import { readTokens, type Tokens, writeTokens } from "./tokens";
@@ -104,6 +104,48 @@ export async function refresh(
 		tokens.last_full_sync_at = new Date().toISOString();
 		await writeTokens(tokens);
 		return summary;
+	});
+}
+
+/**
+ * Incremental refresh of a single resource. Prefer this over refresh() in
+ * mutation commands that need fresh state for one resource before writing —
+ * a full refresh syncs all eight resources and is slower.
+ */
+export async function refreshResource(
+	client: CacheClient,
+	resource: Resource,
+): Promise<ResourceSyncSummary> {
+	return withLock(LOCK(), async () => {
+		const tokens = await readTokens();
+		const result = await syncResource(client, {
+			resource,
+			keyOf: (r: { id: string }) => r.id,
+			previousToken: tokens[resource] ?? null,
+		});
+		tokens[resource] = result.finalToken;
+		tokens.last_full_sync_at = new Date().toISOString();
+		await writeTokens(tokens);
+		return {
+			upserted: result.upsertedCount,
+			tombstones: result.tombstoneCount,
+			pages: result.pages,
+		};
+	});
+}
+
+/**
+ * Write records straight into the local cache without a server round-trip.
+ * Used as write-through after a successful mutation so a follow-up mutation
+ * builds its operation base from the just-applied state, even when the
+ * server's sync endpoint has not caught up with its write endpoint yet.
+ */
+export async function upsertResourceRecords<T extends { id: string }>(
+	resource: Resource,
+	records: T[],
+): Promise<void> {
+	return withLock(LOCK(), async () => {
+		await upsertRecords(cacheFile(`${resource}.jsonl`), records, (r) => r.id);
 	});
 }
 

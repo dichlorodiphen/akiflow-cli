@@ -91,6 +91,8 @@ describe("event command", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
 	let loadCredentialsSpy: ReturnType<typeof spyOn>;
 	let readResourceSpy: ReturnType<typeof spyOn>;
+	let refreshResourceSpy: ReturnType<typeof spyOn>;
+	let upsertResourceRecordsSpy: ReturnType<typeof spyOn>;
 
 	beforeEach(() => {
 		fetchSpy = spyOn(globalThis, "fetch");
@@ -100,12 +102,23 @@ describe("event command", () => {
 		readResourceSpy = spyOn(cache, "readResource").mockImplementation(
 			() => Promise.resolve([event()]) as any,
 		);
+		refreshResourceSpy = spyOn(cache, "refreshResource").mockResolvedValue({
+			upserted: 0,
+			tombstones: 0,
+			pages: 1,
+		} as any);
+		upsertResourceRecordsSpy = spyOn(
+			cache,
+			"upsertResourceRecords",
+		).mockResolvedValue(undefined as any);
 	});
 
 	afterEach(() => {
 		fetchSpy.mockRestore();
 		loadCredentialsSpy.mockRestore();
 		readResourceSpy.mockRestore();
+		refreshResourceSpy.mockRestore();
+		upsertResourceRecordsSpy.mockRestore();
 	});
 
 	it("builds an update payload that preserves attendees and strips local-only fields", () => {
@@ -222,6 +235,92 @@ describe("event command", () => {
 		expect(consoleLogSpy).toHaveBeenCalledWith(
 			"✓ Akiflow calendar event updated successfully",
 		);
+
+		// The update refreshes events before building the payload so the
+		// operation base reflects the latest server state, and writes the
+		// server's response back to the cache so a follow-up update chains
+		// correctly.
+		expect(refreshResourceSpy).toHaveBeenCalledWith(
+			expect.anything(),
+			"events",
+		);
+		expect(upsertResourceRecordsSpy).toHaveBeenCalledWith("events", [
+			expect.objectContaining({
+				id: "event-123456",
+				title: "Updated flight",
+				start_time: expectedStart,
+				end_time: expectedEnd,
+			}),
+		]);
+
+		consoleLogSpy.mockRestore();
+	});
+
+	it("builds the second of back-to-back updates from the first update's state", async () => {
+		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
+		const firstStart = new Date(2026, 5, 20, 10, 0).toISOString();
+		const firstEnd = new Date(2026, 5, 20, 10, 45).toISOString();
+		const secondStart = new Date(2026, 5, 20, 11, 0).toISOString();
+		const secondEnd = new Date(2026, 5, 20, 11, 45).toISOString();
+
+		const firstResponse = {
+			...event(),
+			title: "First update",
+			start_time: firstStart,
+			end_time: firstEnd,
+		};
+		// Simulate write-through: the second read sees the first update's state.
+		readResourceSpy.mockResolvedValueOnce([event()]);
+		readResourceSpy.mockResolvedValueOnce([firstResponse]);
+
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({ success: true, message: null, data: [firstResponse] }),
+				{ status: 200 },
+			),
+		);
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ ...firstResponse, title: "Second update" }],
+				}),
+				{ status: 200 },
+			),
+		);
+
+		const runUpdate = (at: string, title: string) =>
+			eventUpdateCommand.run!({
+				args: {
+					id: "event-123",
+					date: "2026-06-20",
+					at,
+					duration: "45m",
+					title,
+					description: "desc",
+					json: false,
+					_: [],
+				},
+				rawArgs: [],
+			} as any);
+
+		await runUpdate("10:00", "First update");
+		await runUpdate("11:00", "Second update");
+
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		const secondBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string);
+		// The second operation's base must reflect the first update's applied
+		// state, not the original cached state — otherwise the server drops it.
+		expect(secondBody[0].payload.base).toEqual(
+			expect.objectContaining({
+				title: "First update",
+				start_time: firstStart,
+				end_time: firstEnd,
+			}),
+		);
+		expect(secondStart).toBeTruthy();
+		expect(secondEnd).toBeTruthy();
 
 		consoleLogSpy.mockRestore();
 	});
