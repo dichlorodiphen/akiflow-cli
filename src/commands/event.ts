@@ -6,7 +6,7 @@ import type {
 	Event,
 	EventModifierPayload,
 } from "../lib/api/types";
-import { readResource } from "../lib/cache";
+import { readResource, refreshResource, upsertResourceRecords } from "../lib/cache";
 import {
 	createDateTimeUTC,
 	getLocalTimezone,
@@ -394,6 +394,10 @@ export const eventUpdateCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		// Refresh events first so the update's operation base is built from the
+		// latest server state. Without this, back-to-back updates build the
+		// second operation from stale cache and the server silently drops it.
+		await refreshResource(client, "events");
 		const events = await readResource(client, "events");
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
@@ -426,6 +430,13 @@ export const eventUpdateCommand = defineCommand({
 		const response = await client.createEvents([payload]);
 		const updatedEvent = response.data[0];
 		if (!updatedEvent) fail("Failed to update event - no data returned");
+
+		// Write-through: cache the server's returned state so a follow-up
+		// update builds its operation base from the just-applied change, even
+		// when the sync endpoint has not caught up with the write endpoint.
+		if (updatedEvent.id && updatedEvent.start_time) {
+			await upsertResourceRecords("events", [updatedEvent]);
+		}
 
 		if (args.json === true) {
 			console.log(JSON.stringify(updatedEvent, null, 2));
