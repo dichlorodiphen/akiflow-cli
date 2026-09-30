@@ -108,8 +108,12 @@ export function resolveCachedSlot(
 }
 
 export function resolveCachedTask(tasks: Task[], identifier: string): Task {
-	assertMutableTaskId(identifier);
-	identifier = resolveTaskId(identifier, readTaskContext()) ?? identifier;
+	try {
+		assertMutableTaskId(identifier);
+		identifier = resolveTaskId(identifier, readTaskContext()) ?? identifier;
+	} catch (error) {
+		fail(error instanceof Error ? error.message : String(error), 2);
+	}
 	const exact = tasks.find((task) => task.id === identifier);
 	if (exact) {
 		if (isSyntheticTaskId(exact.id))

@@ -406,6 +406,8 @@ export const taskSnoozeCommand = defineCommand({
 			global_updated_at: timestamp,
 		};
 
+		if (task.datetime) updatePayload.datetime = newDate.toISOString();
+
 		if (context.args["dry-run"]) {
 			printDryRun(
 				[previewItem(await cachedTask(taskId), updatePayload)],
