@@ -65,6 +65,9 @@ export function taskStateOf(
 }
 
 export interface Task {
+	/** Local intent overlay; never an observed API field. */
+	pending?: true;
+	pending_conflict?: string;
 	id: string;
 	user_id: number;
 	recurring_id: string | null;

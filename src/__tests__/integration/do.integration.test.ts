@@ -21,7 +21,11 @@ afterEach(async () => {
 
 describe("af task complete (BDD)", () => {
 	test("marks task as done via PATCH /v5/tasks", async () => {
-		const lsResult = await spawnCli(["task", "list"], { env: env.env });
+		const refresh = await spawnCli(["refresh", "--rebuild"], { env: env.env });
+		expect(refresh.exitCode).toBe(0);
+		const lsResult = await spawnCli(["task", "list", "--all"], {
+			env: env.env,
+		});
 		if (lsResult.exitCode !== 0) {
 			console.error("LS STDOUT:", lsResult.stdout);
 			console.error("LS STDERR:", lsResult.stderr);

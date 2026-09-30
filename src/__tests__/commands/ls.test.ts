@@ -1,45 +1,31 @@
 /// <reference types="bun" />
-import {
-	afterEach,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	setSystemTime,
-	spyOn,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getTaskDisplayTitle, lsCommand } from "../../commands/ls";
-import { AkiflowClient } from "../../lib/api/client";
 import type { Task } from "../../lib/api/types";
-import { makeTestEnv } from "../integration/helpers/test-env";
-
-let testEnv: ReturnType<typeof makeTestEnv>;
-let savedEnv: Record<string, string | undefined>;
+import * as tasks from "../../lib/tasks";
 
 let readFileMock: ReturnType<typeof spyOn> | null = null;
 
+let testDir: string;
+const oldCacheDir = process.env.AF_CACHE_DIR;
 beforeEach(() => {
-	setSystemTime(today);
-	testEnv = makeTestEnv("http://127.0.0.1:1");
-	savedEnv = Object.fromEntries(
-		Object.keys(testEnv.env).map((key) => [key, process.env[key]]),
-	);
-	Object.assign(process.env, testEnv.env);
+	testDir = mkdtempSync(join(tmpdir(), "af-list-"));
+	process.env.AF_CACHE_DIR = testDir;
 	// Prevent tests from reading the real ~/.cache/af tasks cache
 	// (which can make tests non-deterministic and hit the real API).
 	readFileMock = spyOn(fs, "readFile").mockRejectedValue(new Error("no cache"));
 });
 
 afterEach(() => {
+	rmSync(testDir, { recursive: true, force: true });
+	if (oldCacheDir === undefined) delete process.env.AF_CACHE_DIR;
+	else process.env.AF_CACHE_DIR = oldCacheDir;
 	readFileMock?.mockRestore();
 	readFileMock = null;
-	setSystemTime();
-	testEnv.cleanup();
-	for (const [key, value] of Object.entries(savedEnv)) {
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
 });
 
 // Fixed local noon keeps the command's "today" and the RRULE anchor on
@@ -292,14 +278,7 @@ const mockTasks: Task[] = [
 
 describe("ls command", () => {
 	it("shows today's tasks by default", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -333,14 +312,7 @@ describe("ls command", () => {
 	});
 
 	it("shows today's date-only tasks with --today", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -385,14 +357,9 @@ describe("ls command", () => {
 			recurrence_version: 1,
 		};
 
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: [recurringMaster],
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue([
+			recurringMaster,
+		]);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -447,14 +414,10 @@ describe("ls command", () => {
 			global_updated_at: "2024-01-01T10:00:00Z",
 		};
 
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: [recurringMaster, doneInstance],
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue([
+			recurringMaster,
+			doneInstance,
+		]);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -484,14 +447,7 @@ describe("ls command", () => {
 	});
 
 	it("shows inbox tasks with --inbox flag", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -523,14 +479,7 @@ describe("ls command", () => {
 	});
 
 	it("shows all tasks with --all flag", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -562,14 +511,7 @@ describe("ls command", () => {
 	});
 
 	it("shows only completed tasks with --done flag", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -601,14 +543,7 @@ describe("ls command", () => {
 	});
 
 	it("filters tasks by project with --project flag", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -640,14 +575,7 @@ describe("ls command", () => {
 	});
 
 	it("outputs JSON format with --json flag", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -682,14 +610,7 @@ describe("ls command", () => {
 	});
 
 	it("outputs plain text without colors with --plain flag", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -720,14 +641,7 @@ describe("ls command", () => {
 	});
 
 	it("shows 'No tasks found' when no tasks match filter", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: [],
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue([]);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -757,26 +671,9 @@ describe("ls command", () => {
 	});
 
 	it("saves task context to file for short ID resolution", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTasks,
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
-
-		let writtenData = "";
-		const writeFileMock = spyOn(fs, "writeFile").mockImplementation((async (
-			_file: unknown,
-			data: unknown,
-		) => {
-			writtenData = String(data);
-			return undefined;
-			// biome-ignore lint/suspicious/noExplicitAny: matching fs.writeFile's broad overload set
-		}) as any);
 
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 
@@ -791,7 +688,9 @@ describe("ls command", () => {
 			},
 		} as never);
 
-		const parsedContext = JSON.parse(writtenData);
+		const parsedContext = JSON.parse(
+			readFileSync(join(testDir, "last-list.json"), "utf8"),
+		);
 		expect(parsedContext).toHaveProperty("tasks");
 		expect(parsedContext).toHaveProperty("timestamp");
 		expect(Array.isArray(parsedContext.tasks)).toBe(true);
@@ -802,14 +701,12 @@ describe("ls command", () => {
 		consoleLogSpy.mockRestore();
 		getTasksMock.mockRestore();
 		mkdirMock.mockRestore();
-		writeFileMock.mockRestore();
 	});
 
 	it("displays error message when API request fails", async () => {
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockRejectedValue(new Error("Network error"));
+		const getTasksMock = spyOn(tasks, "readTasks").mockRejectedValue(
+			new Error("Network error"),
+		);
 
 		const consoleErrorSpy = spyOn(console, "error").mockImplementation(
 			() => {},
@@ -1250,10 +1147,9 @@ describe("ls command search functionality", () => {
 
 	it("searches tasks by Korean title", async () => {
 		// given
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({ success: true, message: null, data: searchTasks });
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(
+			searchTasks,
+		);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -1289,10 +1185,9 @@ describe("ls command search functionality", () => {
 
 	it("searches tasks case-insensitively", async () => {
 		// given
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({ success: true, message: null, data: searchTasks });
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(
+			searchTasks,
+		);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -1323,12 +1218,11 @@ describe("ls command search functionality", () => {
 		writeFileMock.mockRestore();
 	});
 
-	it("uses getTasks when search is provided", async () => {
+	it("uses local observations when search is provided", async () => {
 		// given
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({ success: true, message: null, data: searchTasks });
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(
+			searchTasks,
+		);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -1358,10 +1252,9 @@ describe("ls command search functionality", () => {
 
 	it("searches in doc.original_message content", async () => {
 		// given
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({ success: true, message: null, data: searchTasks });
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(
+			searchTasks,
+		);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -1395,10 +1288,9 @@ describe("ls command search functionality", () => {
 
 	it("returns no tasks when search term not found", async () => {
 		// given
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({ success: true, message: null, data: searchTasks });
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue(
+			searchTasks,
+		);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);
@@ -1480,14 +1372,9 @@ describe("ls command with title fallback", () => {
 			deleted_at: null,
 		};
 
-		const getTasksMock = spyOn(
-			AkiflowClient.prototype,
-			"getTasks",
-		).mockResolvedValue({
-			success: true,
-			message: null,
-			data: [slackTask],
-		});
+		const getTasksMock = spyOn(tasks, "readTasks").mockResolvedValue([
+			slackTask,
+		]);
 
 		const mkdirMock = spyOn(fs, "mkdir").mockResolvedValue(undefined);
 		const writeFileMock = spyOn(fs, "writeFile").mockResolvedValue(undefined);

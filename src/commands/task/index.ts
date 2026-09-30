@@ -20,13 +20,13 @@ import {
 	parseDuration,
 	parseDurationToSeconds,
 } from "../../lib/duration-parser";
-import { removePendingTask } from "../../lib/task-cache";
 import { readTaskContext, resolveTaskId } from "../../lib/task-context";
 import {
 	printTaskMutation,
 	taskMutationOutcome,
 	unknownTaskOutcome,
 } from "../../lib/task-mutation-output";
+import { readTasks, recordTaskIntent } from "../../lib/tasks";
 import {
 	addCalendarDays,
 	addElapsedMillis,
@@ -48,6 +48,7 @@ async function submitTaskMutation(
 	command: string,
 	args: Record<string, unknown>,
 	payload: UpdateTaskPayload,
+	intentKind: "update" | "plan" | "snooze" | "complete" | "delete" = "update",
 ): Promise<boolean> {
 	try {
 		const response = await client.upsertTasks([payload]);
@@ -57,6 +58,12 @@ async function submitTaskMutation(
 			[payload],
 			args.verify === true,
 		);
+		// Record pending intent for accepted/verified receipts (workstream D).
+		for (const receipt of outcome.receipts) {
+			if (receipt.status === "accepted" || receipt.status === "verified") {
+				await recordTaskIntent(intentKind, payload);
+			}
+		}
 		return printTaskMutation(
 			command,
 			args.json === true,
@@ -435,7 +442,7 @@ export const taskPlanCommand = defineCommand({
 			);
 			return;
 		}
-		await submitTaskMutation(client, "task plan", context.args, updatePayload);
+		await submitTaskMutation(client, "task plan", context.args, updatePayload, "plan");
 	},
 });
 
@@ -513,9 +520,16 @@ export const taskSnoozeCommand = defineCommand({
 		const fold = foldArg as "first" | "second" | undefined;
 
 		const client = createClient();
-		const allTasksResponse = context.args["dry-run"]
-			? { success: true, data: [await cachedTask(taskId)] }
-			: await client.getTasks();
+		// D: Task reads are local via unified repository; fallback to server if cache empty.
+		let allTasks = await readTasks(client);
+		if (allTasks.length === 0) {
+			// Cache not initialized (e.g., F tests); fall back to server GET.
+			const serverResponse = await client.getTasks();
+			if (serverResponse.success && serverResponse.data) {
+				allTasks = serverResponse.data;
+			}
+		}
+		const allTasksResponse = { success: true, data: allTasks };
 		if (!allTasksResponse.success || !allTasksResponse.data) {
 			console.error("Error: Failed to fetch tasks");
 			process.exit(1);
@@ -618,6 +632,7 @@ export const taskSnoozeCommand = defineCommand({
 			"task snooze",
 			context.args,
 			updatePayload,
+			"snooze",
 		);
 	},
 });
@@ -669,8 +684,8 @@ export const taskDeleteCommand = defineCommand({
 			"task delete",
 			context.args,
 			updatePayload,
+			"delete",
 		);
-		if (ok) await removePendingTask(taskId);
 	},
 });
 

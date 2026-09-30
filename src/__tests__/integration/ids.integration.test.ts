@@ -126,6 +126,10 @@ test("prefix ambiguity uses full inventory before mutation even when filtered li
 });
 
 test("virtual list records and numbered context are explicitly synthetic", async () => {
+	const refresh = await spawnCli(["refresh", "--rebuild"], {
+		env: { ...env.env, AF_ID_TEST_VIRTUAL: "1" },
+	});
+	expect(refresh.exitCode).toBe(0);
 	const raw = await spawnCli(["task", "list", "--raw"], {
 		env: { ...env.env, AF_ID_TEST_VIRTUAL: "1" },
 	});
@@ -147,6 +151,10 @@ test("virtual list records and numbered context are explicitly synthetic", async
 });
 
 test("cleaned task JSON preserves recurrence, calendar semantics and timezone inside the envelope", async () => {
+	const refresh = await spawnCli(["refresh", "--rebuild"], {
+		env: { ...env.env, AF_H_CLEANED: "1" },
+	});
+	expect(refresh.exitCode).toBe(0);
 	const response = await spawnCli(
 		["task", "list", "--all", "--json", "--envelope"],
 		{ env: { ...env.env, AF_H_CLEANED: "1" } },

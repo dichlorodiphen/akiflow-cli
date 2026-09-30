@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnCli } from "./helpers/spawn-cli";
 import { makeTestEnv } from "./helpers/test-env";
@@ -39,11 +39,45 @@ const slot = {
 	start_datetime_tz: "UTC",
 };
 function snapshot(dir: string): string {
-	return JSON.stringify(
-		readdirSync(dir)
-			.sort()
-			.map((name) => [name, readFileSync(join(dir, name), "utf8")]),
-	);
+	const entries: Array<[string, string]> = [];
+	const rootFiles = readdirSync(dir)
+		.sort()
+		.filter((name) => {
+			try {
+				return statSync(join(dir, name)).isFile();
+			} catch {
+				return false;
+			}
+		});
+	for (const name of rootFiles) {
+		entries.push([name, readFileSync(join(dir, name), "utf8")]);
+	}
+	// Include active generation directory contents (C's generational cache).
+	// The `current` pointer file indicates which generation is active.
+	try {
+		const currentPath = join(dir, "current");
+		if (existsSync(currentPath)) {
+			const generation = readFileSync(currentPath, "utf8").trim();
+			const genDir = join(dir, generation);
+			if (existsSync(genDir)) {
+				const genFiles = readdirSync(genDir)
+					.sort()
+					.filter((name) => {
+						try {
+							return statSync(join(genDir, name)).isFile();
+						} catch {
+							return false;
+						}
+					});
+				for (const name of genFiles) {
+					entries.push([`${generation}/${name}`, readFileSync(join(genDir, name), "utf8")]);
+				}
+			}
+		}
+	} catch {
+		// Ignore errors reading generation directory.
+	}
+	return JSON.stringify(entries);
 }
 
 const cases: Array<[string, string[]]> = [
@@ -203,6 +237,11 @@ describe("universal mutation dry-run", () => {
 						join(env.cacheDir, `${resource}.jsonl`),
 						`${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
 					);
+				// Initialize the generational cache (C) before snapshotting, so the
+				// dry-run's cache initialization doesn't count as a write.
+				await spawnCli(["task", "list", "--raw"], {
+					env: { ...env.env, AF_NO_AUTO_SYNC: "", AF_JSON_ENVELOPE: "0" },
+				});
 				const beforeCache = snapshot(env.cacheDir);
 				const beforeCredentials = readFileSync(env.credentialsPath, "utf8");
 				const result = await spawnCli(

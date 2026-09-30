@@ -89,9 +89,15 @@ export async function readOccurrences(
 	const resources: Resource[] = ["calendars"];
 	if (args.events !== false) resources.push("events");
 	if (args.slots !== false) resources.push("time_slots");
-	if (args.tasks !== false) resources.push("tasks");
+	// Tasks use D's unified repository (with pending overlay), not snapshotResources
+	if (args.tasks !== false) {
+		// Don't include tasks in snapshotResources, we'll read via D's readTasks
+	}
 	if (args.json && !args.summary && !args.free) resources.push("accounts");
 	const snapshot = await snapshotResources(client, resources);
+	// Read tasks via D's unified repository (includes pending overlay)
+	const { readTasks } = await import("./tasks");
+	const tasks = args.tasks === false ? [] : await readTasks(client);
 	const calendars = snapshot.data.calendars;
 	const calendarId =
 		args.calendar === undefined
@@ -118,7 +124,7 @@ export async function readOccurrences(
 	const input = {
 		events: snapshot.data.events,
 		slots: snapshot.data.time_slots,
-		tasks: snapshot.data.tasks,
+		tasks,
 	};
 	const pairs = queryOccurrencesWithRaw(input, query)
 		.map((pair) => {

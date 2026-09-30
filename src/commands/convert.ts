@@ -45,6 +45,7 @@ import {
 	type TaskFilter,
 } from "../lib/filters/task";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import { readTasks, recordTaskIntent } from "../lib/tasks";
 import {
 	type VerificationResult,
 	verifyEventFields,
@@ -265,7 +266,7 @@ function formatPreview(
 	for (const candidate of candidates) {
 		const marker = candidate.match ? "match" : execute ? "created" : "create";
 		lines.push(
-			`- ${marker}: ${candidate.task.title} @ ${candidate.startTime} (${formatDuration(candidate.durationSeconds)})`,
+			`- ${marker}: ${candidate.task.pending ? "[pending] " : ""}${candidate.task.title} @ ${candidate.startTime} (${formatDuration(candidate.durationSeconds)})`,
 		);
 	}
 
@@ -289,6 +290,7 @@ function printJsonSummary(
 				to_delete: deleteSource ? candidates.length : 0,
 				items: candidates.map((candidate) => ({
 					task_id: candidate.task.id,
+					...(candidate.task.pending ? { pending: true } : {}),
 					title: candidate.task.title,
 					start: candidate.startTime,
 					end: candidate.endTime,
@@ -474,7 +476,7 @@ export const convertTasksCommand = defineCommand({
 			? parseDurationToSeconds(rawArgs["default-duration"] as string)
 			: null;
 		const [tasks, events] = await Promise.all([
-			mutationReader(rawArgs.execute !== true)(client, "tasks"),
+			readTasks(client),
 			mutationReader(rawArgs.execute !== true)(client, "events"),
 		]);
 		let selectedTasks = selectTasks(tasks, rawArgs);
@@ -666,6 +668,10 @@ export const convertTasksCommand = defineCommand({
 					...deletion.failedIds.map((id) => `Source deletion failed: ${id}`),
 					...deletion.unknownIds.map((id) => `Source deletion unknown: ${id}`),
 				);
+			else {
+				for (const payload of deletePayloads)
+					await recordTaskIntent("delete", payload);
+			}
 		}
 		const verificationStatus = [...verifications.values()].find(
 			(item) => item.status !== "verified",

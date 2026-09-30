@@ -32,13 +32,19 @@ import {
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { attachProvenance, queryOccurrencesWithRaw } from "../lib/occurrence";
-import { isSyntheticTaskId } from "../lib/task-context";
+import {
+	assertMutableTaskId,
+	isSyntheticTaskId,
+	readTaskContext,
+	resolveTaskId,
+} from "../lib/task-context";
 import {
 	printTaskMutation,
 	type TaskOutcome,
 	taskMutationOutcome,
 	unknownTaskOutcome,
 } from "../lib/task-mutation-output";
+import { readTasks, recordTaskIntent } from "../lib/tasks";
 import { verifyFlag } from "../lib/verify-flag";
 import { createSlotCommand } from "./create";
 
@@ -107,8 +113,12 @@ export function resolveCachedSlot(
 }
 
 export function resolveCachedTask(tasks: Task[], identifier: string): Task {
-	if (isSyntheticTaskId(identifier))
-		fail(`Synthetic task ID "${identifier}" cannot be mutated`, 2);
+	try {
+		assertMutableTaskId(identifier);
+		identifier = resolveTaskId(identifier, readTaskContext()) ?? identifier;
+	} catch (error) {
+		fail(error instanceof Error ? error.message : String(error), 2);
+	}
 	const exact = tasks.find((task) => task.id === identifier);
 	if (exact) {
 		if (isSyntheticTaskId(exact.id))
@@ -144,7 +154,12 @@ function requireActiveSlot(slot: TimeSlot): void {
 
 function activeLinkedTasks(tasks: Task[], slotId: string): Task[] {
 	return tasks.filter(
-		(task) => task.deleted_at == null && task.time_slot_id === slotId,
+		(task) =>
+			task.deleted_at == null &&
+			task.time_slot_id === slotId &&
+			// D: Exclude trashed tasks (status 10 or trashed_at set)
+			task.trashed_at == null &&
+			task.status !== 10,
 	);
 }
 
@@ -433,7 +448,8 @@ function printSlotList(items: SlotWithTasks[]): void {
 	console.log("Akiflow task slots");
 	for (const { slot, tasks } of items) {
 		const duration = formatDurationMinutes(slot.start_time, slot.end_time);
-		const taskText = tasks.length === 1 ? "1 task" : `${tasks.length} tasks`;
+		const pendingCount = tasks.filter((task) => task.pending).length;
+		const taskText = `${tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}${pendingCount ? ` (${pendingCount} pending)` : ""}`;
 		console.log(
 			`${formatSlotDateTime(slot)}  ${slot.title}  ${slot.id}  ${duration}m  ${taskText}`,
 		);
@@ -451,7 +467,9 @@ function printSlotShow(item: SlotWithTasks): void {
 	if (slot.description) console.log(`  Description: ${slot.description}`);
 	console.log(`  Linked tasks: ${tasks.length}`);
 	for (const task of tasks) {
-		console.log(`  - ${task.title ?? "(untitled task)"} (${task.id})`);
+		console.log(
+			`  - ${task.pending ? "[pending] " : ""}${task.title ?? "(untitled task)"} (${task.id})`,
+		);
 	}
 }
 
@@ -554,9 +572,10 @@ export const showSlotCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		// D: Tasks use unified repository with pending overlay; slots use standard reader.
 		const [slots, tasks] = await Promise.all([
 			mutationReader(args["dry-run"] === true)(client, "time_slots"),
-			mutationReader(args["dry-run"] === true)(client, "tasks"),
+			readTasks(client),
 		]);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		requireActiveSlot(slot);
@@ -765,6 +784,13 @@ export const updateSlotCommand = defineCommand({
 							r.id === task.id && ["accepted", "verified"].includes(r.status),
 					),
 				);
+				// D: Record pending intents for slot-linked task updates.
+				for (const receipt of outcome.receipts) {
+					if (receipt.status === "accepted" || receipt.status === "verified") {
+						const payload = taskPayloads.find((p) => p.id === receipt.id);
+						if (payload) await recordTaskIntent("update", payload);
+					}
+				}
 			} catch (error) {
 				outcomes.push(
 					unknownTaskOutcome(

@@ -26,6 +26,8 @@ export interface CleanedSource {
 }
 
 export interface CleanedTaskView {
+	pending?: true;
+	pending_conflict?: string;
 	id: string;
 	status: "inbox" | "planned" | "done" | "trashed";
 	title: string | null;
@@ -53,6 +55,8 @@ export interface CleanedTaskView {
 }
 
 export interface CleanedCalEntry {
+	pending?: true;
+	pending_conflict?: string;
 	id: string;
 	type: "event" | "time_slot" | "task";
 	title: string | null;
@@ -105,6 +109,8 @@ export function toCleanedTaskView(
 	const state = taskStateOf(t);
 	return {
 		id: t.id,
+		...(t.pending ? { pending: true as const } : {}),
+		...(t.pending_conflict ? { pending_conflict: t.pending_conflict } : {}),
 		// CleanedTaskView excludes "deleted" — tombstones never appear in cleaned output
 		status: state === "deleted" ? "trashed" : state,
 		title: t.title,
@@ -291,6 +297,8 @@ export function toCleanedCalView(
 	return {
 		...base,
 		id: t.id,
+		...(t.pending ? { pending: true as const } : {}),
+		...(t.pending_conflict ? { pending_conflict: t.pending_conflict } : {}),
 		type: "task",
 		title: t.title,
 		description: t.description,

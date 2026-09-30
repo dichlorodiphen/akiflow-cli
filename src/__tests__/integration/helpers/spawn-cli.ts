@@ -34,7 +34,11 @@ export async function spawnCli(
 		: [];
 	const proc = spawn(["bun", "run", ...preload, "src/index.ts", ...args], {
 		cwd: opts.cwd ?? REPO_ROOT,
-		env: { ...process.env, ...(opts.env ?? {}) },
+		env: {
+			...process.env,
+			...(opts.env ?? {}),
+
+		},
 		stdout: "pipe",
 		stderr: "pipe",
 		stdin: opts.stdin ? "pipe" : "inherit",

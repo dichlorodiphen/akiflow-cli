@@ -3,6 +3,8 @@ import { defineCommand } from "citty";
 import { rrulestr } from "rrule";
 import { createClient } from "../lib/api/client";
 import type { Account, Label, Task } from "../lib/api/types";
+import { readResource } from "../lib/cache";
+import { atomicWrite } from "../lib/cache/atomic";
 import {
 	endOfDay,
 	type NamedRange,
@@ -27,16 +29,11 @@ import {
 } from "../lib/format/cleaned-types";
 import { cacheFile, cachePath } from "../lib/platform-config";
 import {
-	loadPendingTasks,
-	mergeTasks,
-	removePendingTask,
-} from "../lib/task-cache";
-import {
 	createTaskSnapshot,
 	isSyntheticTaskId,
 	type TaskContext,
 } from "../lib/task-context";
-import { syncTasksCache } from "../lib/tasks-local-cache";
+import { readTasks } from "../lib/tasks";
 
 interface LsOptions {
 	inbox?: boolean;
@@ -113,7 +110,7 @@ function addVirtualRecurringTasksForToday(tasks: Task[]): Task[] {
 
 	for (const master of tasks) {
 		if (!master.recurrence) continue;
-		if (master.deleted_at) continue;
+		if (master.deleted_at || (master.pending && master.done)) continue;
 
 		if (!taskRecursOnDate(master, today)) continue;
 
@@ -311,7 +308,7 @@ function formatTaskTable(
 			: task.done
 				? "✓"
 				: "✗";
-		const displayTitle = `${getTaskDisplayTitle(task, 50)}${isSyntheticTaskId(task.id) ? " [synthetic]" : ""}`;
+		const displayTitle = `${task.pending ? "[pending] " : ""}${getTaskDisplayTitle(task, 50)}${isSyntheticTaskId(task.id) ? " [synthetic]" : ""}`;
 
 		return `${idStr}  ${statusStr}      ${displayTitle}`;
 	});
@@ -339,7 +336,7 @@ async function saveTaskContext(tasks: Task[]): Promise<TaskContext> {
 	};
 
 	context.snapshot = createTaskSnapshot(context);
-	await fs.writeFile(contextFile, JSON.stringify(context, null, 2));
+	await atomicWrite(contextFile, JSON.stringify(context, null, 2));
 	return context;
 }
 
@@ -352,18 +349,18 @@ async function buildResolveContext(
 ): Promise<ResolveContext> {
 	const ctx = emptyContext();
 	try {
-		const labelsResp = await client.getLabels({ limit: 2500 });
-		for (const l of labelsResp.data as Label[]) {
+		const labels = await readResource(client, "labels", { cacheOnly: true });
+		for (const l of labels as Label[]) {
 			ctx.labelsById.set(l.id, l);
 		}
 	} catch {
 		/* empty context is still usable — project name just won't resolve */
 	}
 	try {
-		const accountsResp = await client.get<Account[]>("/v5/accounts", {
-			limit: 2500,
+		const accounts = await readResource(client, "accounts", {
+			cacheOnly: true,
 		});
-		for (const a of accountsResp.data) {
+		for (const a of accounts as Account[]) {
 			ctx.accountsById.set(a.id, a);
 		}
 	} catch {
@@ -450,7 +447,7 @@ function buildExtendedFilter(args: Record<string, unknown>): TaskFilter {
 export const taskListCommand = defineCommand({
 	meta: {
 		name: "list",
-		description: "List tasks with filters",
+		description: "List local tasks with filters and pending intents",
 	},
 	args: {
 		inbox: {
@@ -551,21 +548,15 @@ export const taskListCommand = defineCommand({
 		const client = createClient();
 
 		try {
-			// Always use local full cache + incremental sync.
-			// This avoids missing newest tasks when the API returns a fixed order.
-			const { tasks: apiTasks } = await syncTasksCache(client, { quiet: true });
-
-			// Load pending tasks and merge with API response
-			const pendingTasks = await loadPendingTasks();
-			const tasks = mergeTasks(apiTasks, pendingTasks);
-
-			// Clean up pending tasks that are now in API response
-			const apiTaskIds = new Set(apiTasks.map((t) => t.id));
-			for (const pending of pendingTasks) {
-				if (apiTaskIds.has(pending.id)) {
-					await removePendingTask(pending.id);
-				}
-			}
+			const tasks = await readTasks(client, {
+				includeTrashed: Boolean(
+					args.all ||
+						args.trashed ||
+						String(args.status ?? "")
+							.split(",")
+							.some((s) => s === "all" || s === "trashed"),
+				),
+			});
 
 			const tasksWithVirtualRecurring =
 				!options.all && !options.done && !options.inbox
@@ -605,8 +596,7 @@ export const taskListCommand = defineCommand({
 			}
 
 			if (options.json) {
-				// Cleaned shape: resolve label + account names from cache files
-				// when available, else fall back to fetching them.
+				// Cleaned shape resolves label and account names from local observations.
 				const ctx = await buildResolveContext(client);
 				const cleaned = filteredTasks.map((t) =>
 					isSyntheticTaskId(t.id)

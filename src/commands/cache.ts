@@ -1,6 +1,7 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
-import { syncTasksCache } from "../lib/tasks-local-cache";
+import { refreshResource } from "../lib/cache";
+import { readTasks } from "../lib/tasks";
 
 export const cacheRefreshCommand = defineCommand({
 	meta: {
@@ -11,11 +12,10 @@ export const cacheRefreshCommand = defineCommand({
 		const client = createClient();
 
 		try {
-			const { meta } = await syncTasksCache(client, {
-				forceFull: true,
-				quiet: true,
-			});
-			console.log(`✓ Cache refreshed (${meta.taskCount} tasks)`);
+			await refreshResource(client, "tasks");
+			console.log(
+				`✓ Cache refreshed (${(await readTasks(client)).length} tasks)`,
+			);
 		} catch (error) {
 			if (error instanceof Error) {
 				console.error(`Error: ${error.message}`);

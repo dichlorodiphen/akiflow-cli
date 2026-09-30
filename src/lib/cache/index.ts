@@ -1,5 +1,5 @@
 import { readFileSync, rmSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type {
 	Account,
 	ApiResponse,
@@ -58,6 +58,12 @@ async function syncPass(
 				tokens[resource] = result.finalToken;
 				tokens.last_success_at ??= {};
 				tokens.last_success_at[resource] = new Date().toISOString();
+				if (resource === "tasks") {
+					tokens.deleted_tasks ??= {};
+					for (const id of result.upsertedIds) delete tokens.deleted_tasks[id];
+					for (const id of result.tombstoneIds)
+						tokens.deleted_tasks[id] = tokens.last_success_at[resource];
+				}
 				summary[resource] = {
 					upserted: result.upsertedCount,
 					tombstones: result.tombstoneCount,
@@ -147,40 +153,87 @@ export function autoSyncDisabled(): boolean {
 export async function readResource(
 	client: CacheClient,
 	resource: "tasks",
+	options?: { cacheOnly?: boolean },
 ): Promise<Task[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "events",
+	options?: { cacheOnly?: boolean },
 ): Promise<Event[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "time_slots",
+	options?: { cacheOnly?: boolean },
 ): Promise<TimeSlot[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "labels",
+	options?: { cacheOnly?: boolean },
 ): Promise<Label[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "tags",
+	options?: { cacheOnly?: boolean },
 ): Promise<Tag[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "calendars",
+	options?: { cacheOnly?: boolean },
 ): Promise<Calendar[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "accounts",
+	options?: { cacheOnly?: boolean },
 ): Promise<Account[]>;
 export async function readResource(
 	client: CacheClient,
 	resource: "contacts",
+	options?: { cacheOnly?: boolean },
 ): Promise<Contact[]>;
 export async function readResource<T>(
 	client: CacheClient,
 	resource: Resource,
+	options: { cacheOnly?: boolean } = {},
 ): Promise<T[]> {
-	return (await snapshotResources(client, [resource])).data[resource] as T[];
+	let generation = pinGeneration();
+	if (!generation)
+		generation = await withLock(cacheLockPath(), ensureGeneration);
+	const tokens = await readTokens(generation);
+	const timestamp = tokens.last_success_at?.[resource];
+	const age = timestamp
+		? Date.now() - Date.parse(timestamp)
+		: Number.POSITIVE_INFINITY;
+	if (
+		(!tokens[resource] || !Number.isFinite(age) || age > 24 * 60 * 60 * 1000) &&
+		!autoSyncDisabled() &&
+		!options.cacheOnly
+	) {
+		await sharedRefresh(client);
+		const published = pinGeneration();
+		if (!published)
+			throw new Error("Cache refresh did not publish a generation");
+		generation = published;
+	}
+	// Pin once, then capture the whole file synchronously. No await can mix tokens
+	// or resource files from a subsequent publication. Retry if GC removed an old pin.
+	try {
+		return parseRecords<T>(
+			readFileSync(join(generation, `${resource}.jsonl`), "utf8"),
+		);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		const current = pinGeneration();
+		if (!current || current === generation) throw error;
+		return parseRecords<T>(
+			readFileSync(join(current, `${resource}.jsonl`), "utf8"),
+		);
+	}
+}
+function parseRecords<T>(text: string): T[] {
+	return text
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => JSON.parse(line) as T);
 }
 
 export interface ResourceRecords {
@@ -193,7 +246,8 @@ export interface ResourceRecords {
 	accounts: Account[];
 	contacts: Contact[];
 }
-/** Refresh once, then capture all resource files and tokens without yielding. */
+
+/** Compatibility: read multiple resources at once using D's readResource. */
 export async function snapshotResources(
 	client: CacheClient,
 	resources: readonly Resource[],
@@ -202,60 +256,36 @@ export async function snapshotResources(
 	generation: string | null;
 	observedAt: Record<Resource, string | null>;
 }> {
-	let generation =
-		pinGeneration() ?? (await withLock(cacheLockPath(), ensureGeneration));
-	let tokens = JSON.parse(
-		readFileSync(join(generation, "tokens.json"), "utf8"),
-	) as Tokens;
-	const stale = resources.some((resource) => {
-		const timestamp = tokens.last_success_at?.[resource];
-		const age = timestamp ? Date.now() - Date.parse(timestamp) : Infinity;
-		return (
-			!tokens[resource] || !Number.isFinite(age) || age > 24 * 60 * 60 * 1000
-		);
-	});
-	if (stale && !autoSyncDisabled()) {
-		await sharedRefresh(client);
-		const published = pinGeneration();
-		if (!published)
-			throw new Error("Cache refresh did not publish a generation");
-		generation = published;
+	const data = {} as ResourceRecords;
+	const observedAt = {} as Record<Resource, string | null>;
+	for (const resource of resources) {
+		// Use type assertion to handle the overloaded readResource
+		const records = (await readResource(client, resource as "tasks")) as unknown[];
+		(data as unknown as Record<string, unknown[]>)[resource] = records;
+		const ts = await observationTimestamp(resource);
+		observedAt[resource] = ts ?? null;
 	}
-	const capture = (directory: string) => {
-		tokens = JSON.parse(
-			readFileSync(join(directory, "tokens.json"), "utf8"),
-		) as Tokens;
-		const data = Object.fromEntries(
-			RESOURCES.map((resource) => [
-				resource,
-				resources.includes(resource)
-					? parseRecords(
-							readFileSync(join(directory, `${resource}.jsonl`), "utf8"),
-						)
-					: [],
-			]),
-		) as unknown as ResourceRecords;
-		const observedAt = Object.fromEntries(
-			RESOURCES.map((resource) => [
-				resource,
-				tokens.last_success_at?.[resource] ?? null,
-			]),
-		) as Record<Resource, string | null>;
-		return { data, generation: basename(directory), observedAt };
-	};
-	try {
-		return capture(generation);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		const current = pinGeneration();
-		if (!current || current === generation) throw error;
-		return capture(current);
-	}
+	const generation = pinGeneration() ?? null;
+	return { data, generation, observedAt };
 }
 
-function parseRecords<T>(text: string): T[] {
-	return text
-		.split("\n")
-		.filter((line) => line.trim())
-		.map((line) => JSON.parse(line) as T);
+/** Resource-specific confirmation timestamp from one pinned observation generation. */
+export async function observationTimestamp(
+	resource: Resource,
+): Promise<string | undefined> {
+	const generation = pinGeneration();
+	return generation
+		? (await readTokens(generation)).last_success_at?.[resource]
+		: undefined;
+}
+
+/** Initialize/adopt observations before acquiring a repository transaction lock. */
+export async function initializeCache(): Promise<void> {
+	if (!pinGeneration()) await withLock(cacheLockPath(), ensureGeneration);
+}
+
+/** Explicit tombstones survive removal of rows, within the same pinned generation. */
+export async function observedTaskDeletions(): Promise<Record<string, string>> {
+	const generation = pinGeneration();
+	return generation ? ((await readTokens(generation)).deleted_tasks ?? {}) : {};
 }
