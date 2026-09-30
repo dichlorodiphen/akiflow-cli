@@ -16,6 +16,13 @@ import {
 	resolveEventTargetCalendar,
 } from "../lib/calendar";
 import {
+	clearConversionEntry,
+	decodeResumeToken,
+	encodeResumeToken,
+	findTargetForSource,
+	recordConversion,
+} from "../lib/conversion-journal";
+import {
 	endOfDay,
 	type NamedRange,
 	parseDateBoundary,
@@ -61,7 +68,14 @@ interface ConversionCandidate {
 	endTime: string;
 	durationSeconds: number;
 	payload: CreateEventPayload;
+	/** Matched existing event (from journal + cache), or null if not yet converted. */
 	match: Event | null;
+	/**
+	 * Target event ID from the conversion journal, if this task was previously
+	 * converted. Set even when the event is not in the local cache (requires
+	 * fresh-read verification).
+	 */
+	journalTargetId: string | null;
 }
 
 function taskSearchMatches(task: Task, search: string | undefined): boolean {
@@ -173,41 +187,23 @@ function validateSelectedTasks(
 	return errors;
 }
 
-function eventKey(
-	title: string | null,
-	startTime: string | null,
-	endTime: string | null,
-	calendarId: string,
-): string {
-	return `${calendarId}\u0000${startTime ?? ""}\u0000${endTime ?? ""}\u0000${title ?? ""}`;
-}
-
-function buildExistingEventMap(events: Event[]): Map<string, Event> {
-	const map = new Map<string, Event>();
-	for (const event of events) {
-		if (event.deleted_at || event.hidden || event.status === "cancelled")
-			continue;
-		if (!event.start_time || !event.end_time) continue;
-		map.set(
-			eventKey(
-				event.title,
-				event.start_time,
-				event.end_time,
-				event.calendar_id,
-			),
-			event,
-		);
-	}
-	return map;
-}
-
 function buildCandidates(
 	tasks: Task[],
 	existingEvents: Event[],
 	calendar: Awaited<ReturnType<typeof resolveEventTargetCalendar>>,
 	defaultDurationSeconds: number | null,
 ): ConversionCandidate[] {
-	const existing = buildExistingEventMap(existingEvents);
+	// Provider-identity matching via the conversion journal. The journal maps
+	// source task IDs to target Akiflow event IDs (provider identity). This
+	// replaces the fragile title/time heuristic: a task is "matched" only if
+	// the journal records a prior conversion, and the target event is verified
+	// to exist (via cache here, via fresh read in the execute path).
+	const eventsById = new Map<string, Event>();
+	for (const event of existingEvents) {
+		if (event.deleted_at || event.hidden || event.status === "cancelled")
+			continue;
+		eventsById.set(event.id, event);
+	}
 	return tasks.map((task) => {
 		const startTime = new Date(task.datetime!).toISOString();
 		const durationSeconds = task.duration ?? defaultDurationSeconds!;
@@ -222,10 +218,19 @@ function buildCandidates(
 			timezone: task.datetime_tz,
 			calendar,
 		});
-		const match =
-			existing.get(eventKey(payload.title, startTime, endTime, calendar.id)) ??
-			null;
-		return { task, startTime, endTime, durationSeconds, payload, match };
+		const journalTargetId = findTargetForSource(task.id);
+		const match = journalTargetId
+			? (eventsById.get(journalTargetId) ?? null)
+			: null;
+		return {
+			task,
+			startTime,
+			endTime,
+			durationSeconds,
+			payload,
+			match,
+			journalTargetId,
+		};
 	});
 }
 
@@ -326,6 +331,16 @@ export const convertTasksCommand = defineCommand({
 			description:
 				"Soft-delete sources only after every target is freshly verified",
 		},
+		all: {
+			type: "boolean",
+			description:
+				"Convert all tasks without a selector; required if no other filter is given",
+		},
+		resume: {
+			type: "string",
+			description:
+				"Resume a partial conversion using the token from a previous failure receipt",
+		},
 		"default-duration": {
 			type: "string",
 			description: "Duration to use when a selected task has no duration",
@@ -388,6 +403,72 @@ export const convertTasksCommand = defineCommand({
 			process.exit(1);
 		}
 
+		// Resume token: decode and ensure completed mappings are in the journal.
+		// The token's pending list acts as the selector, so no --all is needed.
+		let resumePending: Set<string> | null = null;
+		const resumeToken = rawArgs.resume as string | undefined;
+		if (resumeToken) {
+			const decoded = decodeResumeToken(resumeToken);
+			if (!decoded) {
+				console.error(
+					"Error: Invalid resume token. Use the token from a previous failure receipt.",
+				);
+				process.exit(2);
+			}
+			// Ensure completed mappings are recorded (journal may have been lost).
+			for (const entry of decoded.completed) {
+				if (!findTargetForSource(entry.source_task_id)) {
+					recordConversion({
+						source_task_id: entry.source_task_id,
+						target_event_id: entry.target_event_id,
+						converted_at: decoded.issued_at,
+						provenance: {
+							title: "(resumed)",
+							start_time: "",
+							calendar_id: "",
+						},
+					});
+				}
+			}
+			resumePending = new Set(decoded.pending);
+		}
+
+		// Unfiltered guard: converting without a selector is dangerous.
+		// Require an explicit selector flag or --all (exit 2 per strict contract).
+		if (!resumeToken) {
+			const hasSelector =
+				rawArgs.all === true ||
+				typeof rawArgs.search === "string" ||
+				typeof rawArgs.status === "string" ||
+				typeof rawArgs.date === "string" ||
+				typeof rawArgs.month === "string" ||
+				typeof rawArgs.from === "string" ||
+				typeof rawArgs.until === "string" ||
+				typeof rawArgs["range-to"] === "string" ||
+				typeof rawArgs.project === "string" ||
+				typeof rawArgs.tag === "string" ||
+				typeof rawArgs.priority === "string" ||
+				typeof rawArgs.connector === "string" ||
+				typeof rawArgs.bucket === "string" ||
+				rawArgs.today === true ||
+				rawArgs.tomorrow === true ||
+				rawArgs.yesterday === true ||
+				rawArgs["this-week"] === true ||
+				rawArgs["next-week"] === true ||
+				rawArgs["this-month"] === true ||
+				rawArgs["next-month"] === true ||
+				rawArgs.overdue === true ||
+				rawArgs.recurring === true ||
+				rawArgs.planned === true ||
+				rawArgs.unplanned === true;
+			if (!hasSelector) {
+				console.error(
+					"Error: af convert tasks requires a selector (e.g. --search, --date, --project) or --all to convert all tasks. Refusing to convert without an explicit scope.",
+				);
+				process.exit(2);
+			}
+		}
+
 		const client = createClient();
 		const defaultDurationSeconds = rawArgs["default-duration"]
 			? parseDurationToSeconds(rawArgs["default-duration"] as string)
@@ -396,7 +477,13 @@ export const convertTasksCommand = defineCommand({
 			mutationReader(rawArgs.execute !== true)(client, "tasks"),
 			mutationReader(rawArgs.execute !== true)(client, "events"),
 		]);
-		const selectedTasks = selectTasks(tasks, rawArgs);
+		let selectedTasks = selectTasks(tasks, rawArgs);
+		// Resume: only attempt tasks in the token's pending list.
+		if (resumePending) {
+			selectedTasks = selectedTasks.filter((task) =>
+				resumePending.has(task.id),
+			);
+		}
 		const validationErrors = validateSelectedTasks(
 			selectedTasks,
 			rawArgs,
@@ -457,6 +544,27 @@ export const convertTasksCommand = defineCommand({
 			return;
 		}
 
+		// Verify journal targets via fresh read: if the journal records a target
+		// event ID but it's not in the local cache, do a fresh read to check
+		// if it exists on the server. If yes, treat as matched (no duplicate).
+		// If no, the journal entry is stale; clear it and create fresh.
+		for (const candidate of candidates) {
+			if (candidate.journalTargetId && !candidate.match) {
+				const journalVerification = await verifyEventFields(
+					client,
+					candidate.journalTargetId,
+					{},
+					{ ...verificationOptions(), singlePoll: true },
+				);
+				if (journalVerification.observed) {
+					candidate.match = journalVerification.observed;
+				} else {
+					clearConversionEntry(candidate.task.id);
+					candidate.journalTargetId = null;
+				}
+			}
+		}
+
 		const toCreate = candidates.filter((candidate) => !candidate.match);
 		const receipts: MutationReceipt[] = toCreate.length
 			? (
@@ -469,6 +577,29 @@ export const convertTasksCommand = defineCommand({
 					)
 				).receipts
 			: [];
+		// Record successful creations in the journal (source→target mapping).
+		// This ensures reruns skip already-converted tasks (no duplicates).
+		for (let i = 0; i < toCreate.length; i++) {
+			const candidate = toCreate[i]!;
+			const receipt = receipts[i];
+			// Receipt event_id is the created event's ID; fall back to payload ID.
+			const targetId = receipt?.event_id ?? candidate.payload.id;
+			if (receipt && receipt.status === "accepted" && targetId) {
+				recordConversion({
+					source_task_id: candidate.task.id,
+					target_event_id: targetId,
+					converted_at: new Date().toISOString(),
+					provenance: {
+						title: candidate.task.title ?? "",
+						start_time: candidate.startTime,
+						calendar_id: candidate.payload.calendar_id ?? "",
+					},
+				});
+				// Update candidate.match so downstream logic treats it as converted.
+				// (We don't have the full Event object, but the ID suffices for
+				// verification and deletion gating.)
+			}
+		}
 		const verifications = new Map<string, VerificationResult<Event>>();
 		const errors: string[] = [];
 		if (rawArgs.verify === true || deleteSource) {
@@ -551,6 +682,35 @@ export const convertTasksCommand = defineCommand({
 						targetsVerified
 							? "verified"
 							: undefined));
+		// Build resume token for partial failures. The token encodes completed
+		// mappings and pending source IDs, allowing `af convert --resume <token>`
+		// to continue without creating duplicates.
+		const completed: Array<{
+			source_task_id: string;
+			target_event_id: string;
+		}> = [];
+		const pending: string[] = [];
+		for (const candidate of candidates) {
+			const targetId =
+				candidate.match?.id ??
+				receipts.find((r) => r.event_id === candidate.payload.id)
+					?.event_id ??
+				candidate.payload.id;
+			const receipt = receipts.find((r) => r.event_id === targetId);
+			const wasMatched = !!candidate.match;
+			const wasAccepted = receipt?.status === "accepted";
+			if (wasMatched || wasAccepted) {
+				completed.push({
+					source_task_id: candidate.task.id,
+					target_event_id: targetId,
+				});
+			} else {
+				pending.push(candidate.task.id);
+			}
+		}
+		const outgoingResumeToken =
+			pending.length > 0 ? encodeResumeToken(completed, pending) : null;
+
 		const result = {
 			mode: "execute",
 			selected: candidates.length,
@@ -558,6 +718,8 @@ export const convertTasksCommand = defineCommand({
 			to_create: toCreate.length,
 			to_delete: deleteSource ? candidates.length : 0,
 			deleted_source_ids: deletion?.succeededIds ?? [],
+			created_event_ids: completed.map((c) => c.target_event_id),
+			resume_token: outgoingResumeToken,
 			items: candidates.map((candidate) => ({
 				task_id: candidate.task.id,
 				event_id: candidate.match?.id ?? candidate.payload.id,

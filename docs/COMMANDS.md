@@ -120,9 +120,13 @@ af cal --no-slots
 ```bash
 af convert tasks --to events [task-list filters] [--default-duration <duration>] [--calendar <calendar>]
 af convert tasks --to events [task-list filters] --execute [--delete-source]
+af convert tasks --to events --all --execute
+af convert tasks --to events --resume <token> --execute
 ```
 
-Conversion dry-runs by default. Source deletion is only allowed with `--execute --delete-source`. Every target (including an existing match) must first pass fresh field verification; any unverified target blocks all source deletions and exits non-zero.
+Conversion dry-runs by default. A selector (e.g. `--search`, `--date`, `--project`) or `--all` is required; unfiltered conversion without `--all` exits with code 2. Source deletion is only allowed with `--execute --delete-source`. Every target (including an existing match) must first pass fresh field verification; any unverified target blocks all source deletions and exits non-zero.
+
+Source→target mappings are persisted in a conversion journal (`conversion-journal.json` in the cache directory). Reruns skip already-converted tasks (no duplicates). On partial failure, the receipt includes `created_event_ids` and a `resume_token`; pass the token to `--resume` to continue without re-creating completed targets.
 
 ## Read-Only Projects, Auth, Cache, Diagnostics
 

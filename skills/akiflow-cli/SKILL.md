@@ -84,7 +84,7 @@ af convert tasks --to events --search "Portland trip:" --from 2026-06-19 --until
 af convert tasks --to events --search "Portland trip:" --from 2026-06-19 --until 2026-06-23 --execute --delete-source
 ```
 
-Conversion dry-runs by default. Connector-backed tasks require `--include-connector-tasks` and are never deleted by conversion v1.
+Conversion dry-runs by default. A selector or `--all` is required (unfiltered conversion exits 2). Connector-backed tasks require `--include-connector-tasks` and are never deleted by conversion v1. Source→target mappings persist in the conversion journal; reruns skip already-converted tasks. On partial failure, use the `resume_token` from the receipt with `--resume` to continue.
 
 ## Complete And Delete Tasks
 

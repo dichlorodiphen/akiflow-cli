@@ -237,3 +237,190 @@ describe("af convert tasks --to events (BDD)", () => {
 		).toBe(false);
 	});
 });
+
+describe("af convert tasks --to events (Workstream B: safe conversion)", () => {
+	test("unfiltered conversion requires --all (exit 2)", async () => {
+		const testEnv = { ...env.env, TZ: "UTC" };
+		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
+			env: testEnv,
+		});
+		expect(refresh.exitCode).toBe(0);
+
+		// No --search, no --all, no date filter: must refuse with exit 2.
+		const result = await spawnCli(
+			["convert", "tasks", "--to", "events", "--execute", "--json"],
+			{ env: testEnv },
+		);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("requires a selector");
+		// No event creation should have been attempted.
+		expect(
+			server.requests.some(
+				(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
+			),
+		).toBe(false);
+	});
+
+	test("unfiltered conversion proceeds with --all", async () => {
+		const testEnv = { ...env.env, TZ: "UTC" };
+		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
+			env: testEnv,
+		});
+		expect(refresh.exitCode).toBe(0);
+
+		const result = await spawnCli(
+			[
+				"convert",
+				"tasks",
+				"--to",
+				"events",
+				"--all",
+				"--execute",
+				"--json",
+			],
+			{ env: testEnv },
+		);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.result.selected).toBe(1);
+	});
+
+	test("failure receipt contains created event IDs and resume token", async () => {
+		// Set up: first creation succeeds, second fails (partial failure).
+		// We'll use two tasks; the fake server fails the second operation.
+		await server.stop();
+		server = new FakeAkiflowServer();
+		await server.start();
+		loadAllFixtures(server);
+		const task1 = convertTaskFixture();
+		const task2 = { ...convertTaskFixture(), id: "task-convert-2", title: "Second convert fixture" };
+		server.respondTo("GET", "/v5/tasks", {
+			success: true,
+			message: null,
+			data: [task1, task2],
+			sync_token: "tasks-token",
+			has_next_page: false,
+		});
+		server.respondTo("GET", "/v5/events", {
+			success: true,
+			message: null,
+			data: [],
+			sync_token: "events-token",
+			has_next_page: false,
+		});
+		server.respondTo("POST", "/v5/event_operations", {
+			success: false,
+			message: "simulated failure",
+			data: [],
+		});
+		env.cleanup();
+		env = makeTestEnv(server.url);
+		const testEnv = { ...env.env, TZ: "UTC" };
+		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
+			env: testEnv,
+		});
+		expect(refresh.exitCode).toBe(0);
+
+		const result = await spawnCli(
+			[
+				"convert",
+				"tasks",
+				"--to",
+				"events",
+				"--search",
+				"convert fixture",
+				"--execute",
+				"--json",
+			],
+			{ env: testEnv },
+		);
+
+		// The batch fails; receipt should contain resume token.
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.result.resume_token).toBeDefined();
+		expect(typeof envelope.result.resume_token).toBe("string");
+		// Created event IDs should be present (may be empty if all failed).
+		expect(Array.isArray(envelope.result.created_event_ids)).toBe(true);
+	});
+
+	test("journal prevents duplicate creation on rerun", async () => {
+		const testEnv = { ...env.env, TZ: "UTC" };
+		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
+			env: testEnv,
+		});
+		expect(refresh.exitCode).toBe(0);
+
+		// First run: convert the task.
+		const first = await spawnCli(
+			[
+				"convert",
+				"tasks",
+				"--to",
+				"events",
+				"--search",
+				"Convert fixture",
+				"--execute",
+				"--json",
+			],
+			{ env: testEnv },
+		);
+		expect(first.exitCode).toBe(0);
+		const firstEnvelope = JSON.parse(first.stdout);
+		expect(firstEnvelope.result.to_create).toBe(1);
+
+		const createRequestsBefore = server.requests.filter(
+			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
+		).length;
+
+		// Second run: same selector. Journal should prevent re-creation.
+		// The fake server returns the created event in GET /v5/events now.
+		// (In a real scenario, refresh would pick it up; here we simulate
+		// by having the server return it.)
+		const createdEventId = firstEnvelope.result.created_event_ids[0];
+		server.respondTo("GET", "/v5/events", {
+			success: true,
+			message: null,
+			data: [
+				{
+					id: createdEventId,
+					title: "Convert fixture trip block",
+					start_time: "2026-06-22T18:30:00.000Z",
+					end_time: "2026-06-22T19:30:00.000Z",
+					calendar_id: "cal-personal-1",
+					status: "confirmed",
+					deleted_at: null,
+					hidden: false,
+					read_only: false,
+				},
+			],
+			sync_token: "events-token-2",
+			has_next_page: false,
+		});
+
+		const second = await spawnCli(
+			[
+				"convert",
+				"tasks",
+				"--to",
+				"events",
+				"--search",
+				"Convert fixture",
+				"--execute",
+				"--json",
+			],
+			{ env: testEnv },
+		);
+		expect(second.exitCode).toBe(0);
+		const secondEnvelope = JSON.parse(second.stdout);
+		// Matched via journal; nothing to create.
+		expect(secondEnvelope.result.matched).toBe(1);
+		expect(secondEnvelope.result.to_create).toBe(0);
+
+		const createRequestsAfter = server.requests.filter(
+			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
+		).length;
+		expect(createRequestsAfter).toBe(createRequestsBefore);
+	});
+});

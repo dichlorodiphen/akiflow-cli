@@ -210,6 +210,7 @@ describe("convert tasks command", () => {
 		await convertTasksCommand.run!({
 			args: {
 				to: "events",
+					all: true,
 				search: "Portland trip",
 				execute: false,
 				_: [],
@@ -246,6 +247,7 @@ describe("convert tasks command", () => {
 			convertTasksCommand.run!({
 				args: {
 					to: "events",
+					all: true,
 					execute: true,
 					"delete-source": true,
 					calendar: "Personal",
@@ -294,7 +296,8 @@ describe("convert tasks command", () => {
 		);
 		await expectReceiptOnlyCommandFailure(() =>
 			convertTasksCommand.run!({
-				args: { to: "events", execute: true, "delete-source": true, _: [] },
+				args: { to: "events",
+					all: true, execute: true, "delete-source": true, _: [] },
 				rawArgs: [],
 			} as any),
 		);
@@ -305,6 +308,19 @@ describe("convert tasks command", () => {
 	});
 
 	it("skips duplicate event creation and can delete matched source tasks", async () => {
+		// Pre-populate the journal: task-1 was already converted to event-1.
+		// This replaces the old title/time heuristic with provider-identity matching.
+		const { recordConversion } = await import("../../lib/conversion-journal");
+		recordConversion({
+			source_task_id: "task-1",
+			target_event_id: "event-1",
+			converted_at: "2026-06-20T00:00:00.000Z",
+			provenance: {
+				title: "Portland trip: lunch",
+				start_time: "2026-06-22T18:30:00.000Z",
+				calendar_id: "cal-1",
+			},
+		});
 		readResourceSpy.mockImplementation((_client: unknown, resource: string) => {
 			if (resource === "tasks") return Promise.resolve([task()]);
 			if (resource === "events") return Promise.resolve([event()]);
@@ -332,6 +348,7 @@ describe("convert tasks command", () => {
 		await convertTasksCommand.run!({
 			args: {
 				to: "events",
+					all: true,
 				execute: true,
 				"delete-source": true,
 				_: [],
@@ -352,6 +369,18 @@ describe("convert tasks command", () => {
 	});
 
 	it("retains canonical read-only verification and refuses source deletion", async () => {
+		// Pre-populate journal so the cached event is treated as the conversion target.
+		const { recordConversion } = await import("../../lib/conversion-journal");
+		recordConversion({
+			source_task_id: "task-1",
+			target_event_id: "event-1",
+			converted_at: "2026-06-20T00:00:00.000Z",
+			provenance: {
+				title: "Portland trip: lunch",
+				start_time: "2026-06-22T18:30:00.000Z",
+				calendar_id: "cal-1",
+			},
+		});
 		readResourceSpy.mockImplementation((_client: unknown, resource: string) => {
 			if (resource === "tasks") return Promise.resolve([task()]);
 			if (resource === "events") return Promise.resolve([event()]);
@@ -373,6 +402,7 @@ describe("convert tasks command", () => {
 			await convertTasksCommand.run?.({
 				args: {
 					to: "events",
+					all: true,
 					execute: true,
 					"delete-source": true,
 					json: true,
@@ -411,7 +441,8 @@ describe("convert tasks command", () => {
 
 		try {
 			await convertTasksCommand.run!({
-				args: { to: "events", _: [] },
+				args: { to: "events",
+					all: true, _: [] },
 				rawArgs: [],
 			} as any);
 		} catch {}
@@ -441,6 +472,7 @@ describe("convert tasks command", () => {
 			await convertTasksCommand.run!({
 				args: {
 					to: "events",
+					all: true,
 					"include-connector-tasks": true,
 					"delete-source": true,
 					_: [],
