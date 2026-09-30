@@ -236,6 +236,39 @@ function parseRecords<T>(text: string): T[] {
 		.map((line) => JSON.parse(line) as T);
 }
 
+export interface ResourceRecords {
+	tasks: Task[];
+	events: Event[];
+	time_slots: TimeSlot[];
+	labels: Label[];
+	tags: Tag[];
+	calendars: Calendar[];
+	accounts: Account[];
+	contacts: Contact[];
+}
+
+/** Compatibility: read multiple resources at once using D's readResource. */
+export async function snapshotResources(
+	client: CacheClient,
+	resources: readonly Resource[],
+): Promise<{
+	data: ResourceRecords;
+	generation: string | null;
+	observedAt: Record<Resource, string | null>;
+}> {
+	const data = {} as ResourceRecords;
+	const observedAt = {} as Record<Resource, string | null>;
+	for (const resource of resources) {
+		// Use type assertion to handle the overloaded readResource
+		const records = (await readResource(client, resource as "tasks")) as unknown[];
+		(data as unknown as Record<string, unknown[]>)[resource] = records;
+		const ts = await observationTimestamp(resource);
+		observedAt[resource] = ts ?? null;
+	}
+	const generation = pinGeneration() ?? null;
+	return { data, generation, observedAt };
+}
+
 /** Resource-specific confirmation timestamp from one pinned observation generation. */
 export async function observationTimestamp(
 	resource: Resource,
