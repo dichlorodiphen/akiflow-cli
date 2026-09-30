@@ -229,18 +229,18 @@ describe("unified task repository", () => {
 			],
 		};
 		expect(() => resolveTaskId("1", context)).toThrow(
-			"Virtual recurring instances cannot be mutated",
+			"Synthetic task ID",
 		);
 		expect(() => resolveTaskId(virtual, null)).toThrow(
-			"Virtual recurring instances cannot be mutated",
+			"Synthetic task ID",
 		);
 		expect(() => resolveTaskId("virtual:", context)).toThrow(
-			"Virtual recurring instances cannot be mutated",
+			"Synthetic task ID",
 		);
 		expect(resolveTaskId("2", context)).toBe(id);
 		await expect(
 			recordTaskIntent("complete", { id: virtual, done: true }),
-		).rejects.toThrow("Virtual");
+		).rejects.toThrow("Synthetic");
 		expect(existsSync(cacheFile("pending-tasks.json"))).toBe(false);
 	});
 	test("atomic failure leaves the old journal intact", async () => {
