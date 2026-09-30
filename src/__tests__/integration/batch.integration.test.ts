@@ -19,14 +19,14 @@ beforeEach(async () => {
 			data: payload,
 		};
 	});
-	server.respondTo("POST", "/v3/events/modifiers", (req: { body: string }) => {
-		const payload = JSON.parse(req.body);
-		return {
-			success: true,
-			message: null,
-			data: payload,
-		};
-	});
+	// The legacy modifiers endpoint returns HTTP 410 in production. It is
+	// registered here only as a regression guard: the CLI must never call it.
+	server.respondTo(
+		"POST",
+		"/v3/events/modifiers",
+		() => ({ success: false, message: "Gone", data: [] }),
+		410,
+	);
 	server.respondTo("PATCH", "/v5/time_slots", (req: { body: string }) => {
 		const payload = JSON.parse(req.body);
 		return {
@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 describe("af batch (BDD)", () => {
-	test("adds attendee emails to selected events through event modifiers", async () => {
+	test("adds attendee emails to selected events through a silent v5 patch operation", async () => {
 		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
 			env: env.env,
 		});
@@ -82,23 +82,36 @@ describe("af batch (BDD)", () => {
 		});
 
 		const request = server.requests.find(
-			(r) => r.method === "POST" && r.url.pathname === "/v3/events/modifiers",
+			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
 		);
 		expect(request).toBeDefined();
 		const payload = JSON.parse(request!.body);
 		expect(payload).toHaveLength(1);
 		expect(payload[0]).toMatchObject({
 			event_id: "event-meeting-1",
-			action: "attendees/updateList",
-			content: {
-				attendeeEmailsToAdd: ["julia@example.com"],
-				attendeeEmailsToRemove: [],
-				sendUpdates: "all",
+			connector_id: "google",
+			account_id: "account-gmail-1",
+			calendar_id: "cal-personal-1",
+			operation: "patch",
+			payload: {
+				changes: {
+					attendees: [
+						{ email: "pat@example.com", name: "Pat", response: "accepted" },
+						{ email: "julia@example.com", responseStatus: "needsAction" },
+					],
+				},
+				send_updates: false,
 			},
 		});
+		// The 410 modifiers endpoint is never touched.
+		expect(
+			server.requests.some(
+				(r) => r.method === "POST" && r.url.pathname === "/v3/events/modifiers",
+			),
+		).toBe(false);
 	});
 
-	test("dry-runs attendee removal without posting modifiers", async () => {
+	test("dry-runs attendee removal without posting operations", async () => {
 		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
 			env: env.env,
 		});
@@ -131,7 +144,10 @@ describe("af batch (BDD)", () => {
 		});
 		expect(
 			server.requests.some(
-				(r) => r.method === "POST" && r.url.pathname === "/v3/events/modifiers",
+				(r) =>
+					r.method === "POST" &&
+					(r.url.pathname === "/v5/event_operations" ||
+						r.url.pathname === "/v3/events/modifiers"),
 			),
 		).toBe(false);
 	});
@@ -151,7 +167,7 @@ describe("af batch (BDD)", () => {
 				"2026-05-21",
 				"--search",
 				"Standup",
-				"--notify",
+				"--send-updates",
 				"none",
 				"--execute",
 				"--json",
@@ -230,12 +246,14 @@ describe("af batch (BDD)", () => {
 		]);
 	});
 
-	test("reports partial event modifier failures and exits nonzero", async () => {
+	test("reports partial v5 operation failures and exits nonzero", async () => {
 		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
 			env: env.env,
 		});
 		expect(refresh.exitCode).toBe(0);
-		server.respondTo("POST", "/v3/events/modifiers", {
+		// Empty result data: the envelope cannot identify any operation, so
+		// receipts stay unknown and the command exits nonzero.
+		server.respondTo("POST", "/v5/event_operations", {
 			success: true,
 			message: null,
 			data: [],

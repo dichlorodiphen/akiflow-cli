@@ -272,6 +272,7 @@ describe("convert tasks command", () => {
 						start_time: "2026-06-22T18:30:00.000Z",
 						end_time: "2026-06-22T19:30:00.000Z",
 					}),
+					send_updates: false,
 				},
 			}),
 		);

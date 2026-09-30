@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { buildCreateEventPayload } from "../../commands/create";
 import { AkiflowClient } from "../../lib/api/client";
+import {
+	buildCreateEventOperation,
+	buildDeleteEventOperation,
+	buildPatchEventOperation,
+} from "../../lib/api/event-intents";
 import type {
 	Calendar,
 	EventOperationPayload,
@@ -39,7 +44,7 @@ function mockResponse(make: (operations: EventOperationPayload[]) => unknown) {
 	});
 }
 
-describe("createEvents receipt transport", () => {
+describe("submitEventOperations receipt transport", () => {
 	it("returns server operation results instead of submitted event fields", async () => {
 		const client = mockResponse((operations) => ({
 			success: true,
@@ -52,7 +57,9 @@ describe("createEvents receipt transport", () => {
 				processed_at: "2026-06-20T16:00:01Z",
 			})),
 		}));
-		const result = await client.createEvents([payload]);
+		const result = await client.submitEventOperations([
+			buildCreateEventOperation(payload),
+		]);
 		expect(result.allAccepted).toBe(true);
 		expect(result.receipts[0]?.result).toEqual({
 			title: "Server canonical title",
@@ -71,7 +78,9 @@ describe("createEvents receipt transport", () => {
 		const client = new AkiflowClient({
 			credentials: { token: "synthetic-token", clientId: "synthetic-client" },
 		});
-		const result = await client.createEvents([payload]);
+		const result = await client.submitEventOperations([
+			buildCreateEventOperation(payload),
+		]);
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(result.receipts[0]?.status).toBe("unknown");
 		expect(result.receipts[0]?.operation_id).toBeString();
@@ -88,15 +97,40 @@ describe("createEvents receipt transport", () => {
 				status: "succeeded",
 			})),
 		}));
-		const result = await client.createEvents([
-			payload,
-			{
-				...payload,
-				id: "patch-event",
-				origin_id: "provider-event",
-				event_operation_base: { title: "Old title" },
-			},
-			{ ...payload, id: "delete-event", deleted_at: "2026-06-20T16:00:00Z" },
+		const route = {
+			connectorId: "google",
+			accountId: "synthetic-account",
+			calendarId: "synthetic-calendar",
+		};
+		const target = {
+			id: "target-event",
+			deleted_at: null,
+			status: "confirmed" as const,
+			read_only: false,
+			hidden: false,
+		};
+		const result = await client.submitEventOperations([
+			buildCreateEventOperation(payload, "none", 0),
+			buildPatchEventOperation(
+				{
+					...route,
+					eventId: "patch-event",
+					target: { ...target, id: "patch-event" },
+				},
+				{ title: "Old title" },
+				{ title: "New title" },
+				"none",
+				1,
+			),
+			buildDeleteEventOperation(
+				{
+					...route,
+					eventId: "delete-event",
+					target: { ...target, id: "delete-event" },
+				},
+				"none",
+				2,
+			),
 		]);
 		expect(result.receipts.map((receipt) => receipt.kind)).toEqual([
 			"create",
@@ -163,7 +197,9 @@ describe("createEvents receipt transport", () => {
 		];
 		for (const testCase of cases) {
 			const client = mockResponse(testCase.make);
-			const result = await client.createEvents([payload]);
+			const result = await client.submitEventOperations([
+				buildCreateEventOperation(payload),
+			]);
 			expect(result.receipts[0]?.status).toBe(testCase.status);
 			expect(result.allAccepted).toBe(false);
 			expect("data" in result).toBe(false);

@@ -159,7 +159,8 @@ describe("completion command", () => {
 			.map((c: unknown[]) => c[0])
 			.join("\n");
 		expect(output).toContain("delete");
-		expect(output).toContain("--notify");
+		expect(output).toContain("--send-updates");
+		expect(output).not.toContain("--notify");
 	});
 
 	it("includes slot lifecycle flags in bash", async () => {

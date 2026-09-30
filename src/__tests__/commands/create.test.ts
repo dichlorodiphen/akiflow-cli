@@ -224,6 +224,7 @@ describe("create command", () => {
 						start_datetime_tz: expectedTimezone,
 						location: "Office",
 					},
+					send_updates: false,
 				},
 			}),
 		);

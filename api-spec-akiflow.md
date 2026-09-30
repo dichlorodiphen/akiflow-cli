@@ -413,9 +413,14 @@ the desired fields as both base and changes causes a provider conflict.
 Deletes use `operation: "delete"` with
 `payload: { "send_updates": true | false }`.
 
-The legacy attendee-modifier endpoint, `POST /v3/events/modifiers`, also returns
-HTTP 410 as of this capture. Its historical payload is retained below for
-reference while the v5 attendee-operation shape remains unimplemented.
+The legacy attendee-modifier endpoint, `POST /v3/events/modifiers`, returns
+HTTP 410 and is never called. Attendee add/remove ride the v5 path as an
+explicit `operation: "patch"` whose `payload.changes.attendees` carries the
+full merged attendee list (existing members preserved, new ones marked
+`needsAction`), with operation-level `payload.send_updates` controlling guest
+notifications. Patch-level `send_updates` provider semantics have not been
+independently captured; the field is emitted with the delete-documented shape
+and tests assert exactly what goes on the wire.
 
 ### Legacy v3 capture (historical)
 

@@ -309,8 +309,6 @@ export interface CreateEventPayload {
 	global_created_at: string | null;
 	deleted_at: string | null;
 	global_updated_at: string;
-	/** Local-only base snapshot used when translating legacy updates to v5 operations. */
-	event_operation_base?: Record<string, unknown>;
 }
 
 export type EventOperationKind = "create" | "patch" | "delete";
@@ -373,31 +371,6 @@ export function isReadOnlyCanonical(record: unknown): boolean {
 		record.read_only === true
 	);
 }
-
-export type EventModifierAction = "attendees/updateList";
-
-export interface EventModifierPayload {
-	id: string;
-	akiflow_account_id: string | null;
-	event_id: string;
-	calendar_id: string;
-	action: EventModifierAction;
-	content: {
-		attendeeEmailsToAdd: string[];
-		attendeeEmailsToRemove: string[];
-		attendeeResponseStatusesByEmail?: Record<string, string>;
-		sendUpdates: "all";
-	};
-	processed_at: string | null;
-	failed_at: string | null;
-	result: unknown | null;
-	attempts: number;
-	global_created_at: string;
-	deleted_at: string | null;
-	global_updated_at: string;
-}
-
-export type EventModifier = EventModifierPayload;
 
 export interface Event {
 	id: string;

@@ -100,7 +100,7 @@ const cases: Array<[string, string[]]> = [
 			"30m",
 		],
 	],
-	["event delete", ["event", "delete", eventId, "--notify", "none"]],
+	["event delete", ["event", "delete", eventId, "--send-updates", "none"]],
 	["attendees add", ["event", "attendees", "add", eventId, "new@example.com"]],
 	[
 		"attendees remove",

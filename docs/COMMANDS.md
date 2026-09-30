@@ -8,7 +8,7 @@ Every task/event/slot mutation accepts `--dry-run`, including event delete and s
 
 ```bash
 af task update <uuid> --title "New title" --dry-run --json
-af event delete <event-id> --notify none --dry-run --json
+af event delete <event-id> --send-updates none --dry-run --json
 af convert tasks --to events --search "Trip:" --dry-run --json
 ```
 
@@ -66,21 +66,21 @@ Numeric short IDs come from the latest task list snapshot; use `--snapshot <toke
 ## Events
 
 ```bash
-af event create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--description <text>|--description-file <path>] [--location <text>] [--json]
-af event update <event-id> [--date <date>] [--at HH:MM] [--duration <duration>] [--title <text>] [--description <text>|--description-file <path>] [--location <text>] [--json]
-af event delete <event-id> [--notify all|none] [--json]
-af event attendees add <event-id> <email> [more emails...] [--json]
-af event attendees remove <event-id> <email> [more emails...] [--json]
+af event create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--description <text>|--description-file <path>] [--location <text>] [--send-updates none|all] [--json]
+af event update <event-id> [--date <date>] [--at HH:MM] [--duration <duration>] [--title <text>] [--description <text>|--description-file <path>] [--location <text>] [--send-updates none|all] [--json]
+af event delete <event-id> [--send-updates none|all] [--json]
+af event attendees add <event-id> <email> [more emails...] [--send-updates none|all] [--json]
+af event attendees remove <event-id> <email> [more emails...] [--send-updates none|all] [--json]
 ```
 
-Event v1 supports timed, writable, non-recurring Google events only. All-day, recurrence, reminders, and conferencing are unsupported. Event delete defaults to `--notify all`; use `--notify none` for disposable cleanup.
+Event v1 supports timed, writable, non-recurring Google events only. All-day, recurrence, reminders, and conferencing are unsupported. Event mutations default to `--send-updates none` (silent guest handling); use `--send-updates all` to notify guests.
 
 ## Batch Operations
 
 ```bash
-af batch events attendees add <email> [more emails...] [event selectors] [--execute] [--json]
-af batch events attendees remove <email> [more emails...] [event selectors] [--execute] [--json]
-af batch events delete [event selectors] [--notify all|none] [--execute] [--json]
+af batch events attendees add <email> [more emails...] [event selectors] [--send-updates none|all] [--execute] [--json]
+af batch events attendees remove <email> [more emails...] [event selectors] [--send-updates none|all] [--execute] [--json]
+af batch events delete [event selectors] [--send-updates none|all] [--execute] [--json]
 af batch slots delete [slot selectors] [--execute] [--json]
 ```
 

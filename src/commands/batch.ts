@@ -1,12 +1,18 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import {
+	buildDeleteEventOperation,
+	buildPatchEventOperation,
+	type EventSendUpdates,
+	eventOperationRoute,
+	eventTargetRejectionReason,
+} from "../lib/api/event-intents";
 import { checkTaskMutationResult } from "../lib/api/task-results";
 import type {
 	ApiResponse,
 	Calendar,
-	CreateEventPayload,
 	Event,
-	EventModifierPayload,
+	EventOperationPayload,
 	MutationReceipt,
 	TimeSlot,
 	UpdateTimeSlotPayload,
@@ -27,20 +33,20 @@ import {
 	startOfDay,
 } from "../lib/date-parser";
 import { dryRunArgs, mutationReader, previewItem } from "../lib/dry-run";
-import { classifyExit } from "../lib/output-contract";
 import { EXIT_CODES } from "../lib/exit-codes";
 import { filterEvents } from "../lib/filters/event";
 import { outputMutation } from "../lib/mutation-output";
+import { classifyExit } from "../lib/output-contract";
 import {
 	type VerificationResult,
 	verifyEventDeleted,
 } from "../lib/verification";
 import { verificationOptions } from "../lib/verify-flag";
 import {
-	buildAttendeeModifierPayload,
-	buildEventDeletePayload,
+	buildAttendeePatchIntent,
 	collectAttendeeEmails,
 	existingAttendeeEmails,
+	resolveSendUpdatesFlag,
 } from "./event";
 import { buildSlotDeletePayload } from "./slot";
 
@@ -360,10 +366,10 @@ export function selectBatchSlots(
 }
 
 export function mutableTimedGoogleEventSkipReason(event: Event): string | null {
-	if (event.deleted_at) return "event is deleted";
-	if (event.status === "cancelled") return "event is cancelled";
-	if (event.hidden) return "event is hidden";
-	if (event.read_only) return "event is read-only";
+	// Central target rejection (cancelled/deleted/read-only/hidden) with
+	// precise reasons; the v1 capability limits below are CLI-specific.
+	const targetReason = eventTargetRejectionReason(event);
+	if (targetReason) return targetReason;
 	if (event.connector_id !== "google") {
 		return `event uses connector "${event.connector_id}"`;
 	}
@@ -412,8 +418,9 @@ export function planEventAttendeeBatch(
 	events: Event[],
 	emails: string[],
 	mode: AttendeeMode,
-): Array<PlannedBatchItem<EventModifierPayload>> {
-	return events.map((event) => {
+	sendUpdates: EventSendUpdates = "none",
+): Array<PlannedBatchItem<EventOperationPayload>> {
+	return events.map((event, index) => {
 		const item = baseEventItem(event);
 		const skipReason = mutableTimedGoogleEventSkipReason(event);
 		if (skipReason) return { ...item, action: "skip", reason: skipReason };
@@ -436,31 +443,47 @@ export function planEventAttendeeBatch(
 			};
 		}
 
+		// Attendee edits ride the supported v5 event_operations path as an
+		// explicit patch intent. The legacy POST /v3/events/modifiers
+		// endpoint returns HTTP 410 and is never called.
+		const intent = buildAttendeePatchIntent({
+			event,
+			add: mode === "add" ? toChange : [],
+			remove: mode === "remove" ? toChange : [],
+			sendUpdates,
+		});
+		const payload = buildPatchEventOperation(
+			eventOperationRoute(event),
+			intent.base,
+			intent.changes,
+			intent.sendUpdates,
+			index,
+		);
 		return {
 			...item,
 			action: "change",
 			emails: toChange,
-			payload: buildAttendeeModifierPayload({
-				event,
-				add: mode === "add" ? toChange : [],
-				remove: mode === "remove" ? toChange : [],
-			}),
+			payload,
 		};
 	});
 }
 
 export function planEventDeleteBatch(
 	events: Event[],
-	notify: "all" | "none",
-): Array<PlannedBatchItem<CreateEventPayload>> {
-	return events.map((event) => {
+	sendUpdates: EventSendUpdates = "none",
+): Array<PlannedBatchItem<EventOperationPayload>> {
+	return events.map((event, index) => {
 		const item = baseEventItem(event);
 		const skipReason = mutableTimedGoogleEventSkipReason(event);
 		if (skipReason) return { ...item, action: "skip", reason: skipReason };
 		return {
 			...item,
 			action: "change",
-			payload: buildEventDeletePayload({ event, notify }),
+			payload: buildDeleteEventOperation(
+				eventOperationRoute(event),
+				sendUpdates,
+				index,
+			),
 		};
 	});
 }
@@ -516,78 +539,6 @@ export function classifyBatchResults<TPayload>(
 				"API did not identify an outcome; no success claimed",
 		};
 	});
-}
-
-/** Match modifier responses and envelope failures by modifier operation ID. */
-export function classifyBatchModifierResults(
-	payloads: EventModifierPayload[],
-	response: ApiResponse<EventModifierPayload[]>,
-): { receipts: MutationReceipt[]; errors: string[] } {
-	const returned = new Map(
-		(response.data ?? []).map((record) => [record.id, record]),
-	);
-	const matching = (response.data ?? []).filter((record) =>
-		payloads.some(
-			(payload) =>
-				payload.id === record.id && payload.event_id === record.event_id,
-		),
-	);
-	const failed = [
-		...(response.failed ?? []),
-		...matching
-			.filter(
-				(record) =>
-					record.failed_at != null ||
-					(record as EventModifierPayload & { status?: string }).status ===
-						"failed",
-			)
-			.map((record) => ({
-				id: record.id,
-				error: record.result ?? "Modifier failed",
-			})),
-	];
-	const checked = checkTaskMutationResult(
-		{ ...response, data: matching, failed },
-		payloads.map((payload) => payload.id),
-	);
-	const receipts = payloads.map((payload): MutationReceipt => {
-		const record = returned.get(payload.id);
-		const failure = failed.find((failure) => failure.id === payload.id);
-		const rawStatus = (
-			record as (EventModifierPayload & { status?: string }) | undefined
-		)?.status;
-		const status = checked.failedIds.includes(payload.id)
-			? "failed"
-			: !checked.succeededIds.includes(payload.id)
-				? "unknown"
-				: rawStatus === "pending" && !record?.processed_at
-					? "pending"
-					: rawStatus !== undefined &&
-							![
-								"accepted",
-								"processed",
-								"completed",
-								"pending",
-								"success",
-							].includes(rawStatus)
-						? "unknown"
-						: "accepted";
-		return {
-			operation_id: payload.id,
-			event_id: payload.event_id,
-			kind: "patch",
-			status,
-			failed_at: record?.failed_at ?? null,
-			processed_at: record?.processed_at ?? null,
-			result: record?.result ?? null,
-			...(failure
-				? { error: failure.error }
-				: status === "unknown"
-					? { error: response.message ?? "Modifier outcome not identified" }
-					: {}),
-		};
-	});
-	return { receipts, errors: checked.errors };
 }
 
 function toReportItem<TPayload>(
@@ -729,6 +680,7 @@ async function runBatchEventAttendees(
 ): Promise<void> {
 	requireSelector(args, EVENT_SELECTOR_FLAGS, "events");
 	const emails = collectAttendeeEmails(args);
+	const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
 	const client = createClient();
 	if (args.execute === true) await refreshResource(client, "events");
 	const [events, calendars] = await Promise.all([
@@ -736,7 +688,7 @@ async function runBatchEventAttendees(
 		mutationReader(args.execute !== true)(client, "calendars"),
 	]);
 	const selected = selectBatchEvents(events, calendars, args);
-	let planned = planEventAttendeeBatch(selected, emails, mode);
+	let planned = planEventAttendeeBatch(selected, emails, mode, sendUpdates);
 	const operation = `events.attendees.${mode}`;
 	const execute = args.execute === true;
 	const json = args.json === true;
@@ -760,7 +712,7 @@ async function runBatchEventAttendees(
 				...previewItem(
 					event ? { ...event, attendees: existing } : null,
 					after,
-					"all",
+					sendUpdates,
 				),
 				action: item.action,
 			};
@@ -770,27 +722,19 @@ async function runBatchEventAttendees(
 	}
 
 	const changes = changedItems(planned);
-	let response: ApiResponse<EventModifierPayload[]> = {
-		success: true,
-		message: null,
-		data: [],
-	};
-	if (changes.length) {
-		try {
-			response = await client.createEventModifiers(
-				changes.map((item) => item.payload),
-			);
-		} catch (error) {
-			response = { success: false, data: [], message: String(error) };
-		}
-	}
-	const checked = classifyBatchModifierResults(
-		changes.map((item) => item.payload),
-		response,
-	);
+	const response =
+		changes.length > 0
+			? await client.submitEventOperations(changes.map((item) => item.payload))
+			: {
+					receipts: [] as MutationReceipt[],
+					raw: { success: true, message: null, data: [] },
+					allAccepted: true,
+				};
+	const receipts = response.receipts;
+	const errors: string[] = [];
 	const verifications = new Map<string, VerificationResult<Event>>();
 	if (args.verify === true) {
-		for (const receipt of checked.receipts) {
+		for (const receipt of receipts) {
 			if (receipt.status !== "accepted") continue;
 			const item = changes.find((item) => item.id === receipt.event_id);
 			const verification = await verifyEventAttendees(
@@ -805,7 +749,7 @@ async function runBatchEventAttendees(
 					await upsertResourceRecords("events", [verification.observed]);
 				verification.status = "mismatch";
 				verification.differingFields.push("read_only");
-				checked.errors.push(
+				errors.push(
 					`Event ${receipt.event_id} is read-only; further mutation refused.`,
 				);
 			}
@@ -814,9 +758,7 @@ async function runBatchEventAttendees(
 	}
 	planned = planned.map((item) => {
 		if (item.action !== "change") return item;
-		const receipt = checked.receipts.find(
-			(receipt) => receipt.event_id === item.id,
-		);
+		const receipt = receipts.find((receipt) => receipt.event_id === item.id);
 		const verification = verifications.get(item.id);
 		return {
 			...item,
@@ -833,11 +775,11 @@ async function runBatchEventAttendees(
 		};
 	});
 	const returnedEventIds = new Set(
-		(response.data ?? []).map((d) => d.event_id),
+		(response.raw.data ?? []).map((d) => d.event_id),
 	);
 	const missing = changes.filter((c) => !returnedEventIds.has(c.id));
 	const isPartial =
-		response.success === true &&
+		response.raw.success === true &&
 		missing.length > 0 &&
 		returnedEventIds.size > 0;
 	if (isPartial) {
@@ -851,7 +793,8 @@ async function runBatchEventAttendees(
 		};
 		const structuredErrors = missing.map((c) => ({
 			id: c.id,
-			message: response.message ?? "API did not return a result for this item",
+			message:
+				response.raw.message ?? "API did not return a result for this item",
 		}));
 		if (json) {
 			console.log(
@@ -860,7 +803,7 @@ async function runBatchEventAttendees(
 						schema_version: 1,
 						command: `batch events attendees ${mode}`,
 						status: "partial",
-						receipts: checked.receipts,
+						receipts,
 						result: partialReport,
 						errors: structuredErrors,
 						warnings: [],
@@ -879,26 +822,26 @@ async function runBatchEventAttendees(
 	outputMutation({
 		command: `batch events attendees ${mode}`,
 		json,
-		receipts: checked.receipts,
+		receipts,
 		verifications,
 		result: buildBatchReport(operation, "execute", planned),
-		errors: checked.errors,
-		...(checked.errors.length &&
-		checked.receipts.every((receipt) => receipt.status === "accepted")
+		errors,
+		...(errors.length &&
+		receipts.every((receipt) => receipt.status === "accepted")
 			? { status: "unknown" as const }
 			: {}),
 	});
 	if (!json)
 		printBatchReport(buildBatchReport(operation, "execute", planned), false);
 	const hasFailures =
-		checked.errors.length > 0 ||
-		checked.receipts.some((r) =>
+		errors.length > 0 ||
+		receipts.some((r) =>
 			["failed", "unknown", "mismatch", "timeout"].includes(r.status),
 		);
 	if (hasFailures) {
 		const allErrors = [
-			...checked.errors,
-			...checked.receipts
+			...errors,
+			...receipts
 				.filter((r) => r.error !== undefined)
 				.map((r) => `${r.event_id}: ${r.error}`),
 		];
@@ -910,10 +853,7 @@ async function runBatchEventDelete(
 	args: Record<string, unknown>,
 ): Promise<void> {
 	requireSelector(args, EVENT_SELECTOR_FLAGS, "events");
-	const notify = String(args.notify ?? "all");
-	if (notify !== "all" && notify !== "none") {
-		fail(`Invalid --notify "${notify}". Expected "all" or "none".`);
-	}
+	const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
 
 	const client = createClient();
 	if (args.execute === true) await refreshResource(client, "events");
@@ -922,29 +862,27 @@ async function runBatchEventDelete(
 		mutationReader(args.execute !== true)(client, "calendars"),
 	]);
 	const selected = selectBatchEvents(events, calendars, args);
-	let planned = planEventDeleteBatch(selected, notify);
+	let planned = planEventDeleteBatch(selected, sendUpdates);
 	const operation = "events.delete";
 	const execute = args.execute === true;
 	const json = args.json === true;
 
 	if (!execute) {
-		planned = planned.map((item) => ({
-			...item,
-			before: selected.find((record) => record.id === item.id) ?? null,
-			after:
-				item.payload ??
-				selected.find((record) => record.id === item.id) ??
-				null,
-			notification_policy: operation.includes("slot")
-				? "none"
-				: String(args.notify ?? "all"),
-		}));
+		planned = planned.map((item) => {
+			const original = selected.find((record) => record.id === item.id);
+			return {
+				...item,
+				before: original ?? null,
+				after: original ? { ...original, status: "cancelled" } : null,
+				notification_policy: sendUpdates,
+			};
+		});
 		printBatchReport(buildBatchReport(operation, "dry-run", planned), json);
 		return;
 	}
 
 	const changes = changedItems(planned);
-	const response = await client.createEvents(
+	const response = await client.submitEventOperations(
 		changes.map((item) => item.payload),
 	);
 	const verifications = new Map<string, VerificationResult<Event>>();
@@ -1071,6 +1009,10 @@ const batchEventAttendeeAddCommand = defineCommand({
 			description: "Attendee email; additional emails may follow",
 			required: true,
 		},
+		"send-updates": {
+			type: "string",
+			description: "Guest notification mode: none (default, silent) or all",
+		},
 		...eventSelectorArgs,
 		...executionArgs,
 	},
@@ -1089,6 +1031,10 @@ const batchEventAttendeeRemoveCommand = defineCommand({
 			type: "positional",
 			description: "Attendee email; additional emails may follow",
 			required: true,
+		},
+		"send-updates": {
+			type: "string",
+			description: "Guest notification mode: none (default, silent) or all",
 		},
 		...eventSelectorArgs,
 		...executionArgs,
@@ -1116,10 +1062,9 @@ const batchEventDeleteCommand = defineCommand({
 	},
 	args: {
 		...eventSelectorArgs,
-		notify: {
+		"send-updates": {
 			type: "string",
-			description: "Google attendee notification mode: all or none",
-			default: "all",
+			description: "Guest notification mode: none (default, silent) or all",
 		},
 		...executionArgs,
 	},

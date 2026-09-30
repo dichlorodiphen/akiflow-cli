@@ -1,12 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
-import { checkTaskMutationResult } from "../lib/api/task-results";
-import type {
-	CreateEventPayload,
-	Event,
-	EventModifierPayload,
-} from "../lib/api/types";
+import {
+	buildDeleteEventOperation,
+	buildPatchEventOperation,
+	type EventSendUpdates,
+	eventOperationRoute,
+	eventTargetRejectionReason,
+	InvalidEventTargetError,
+	parseSendUpdates,
+	providerEventPayload,
+} from "../lib/api/event-intents";
+import type { CreateEventPayload, Event } from "../lib/api/types";
 import { isReadOnlyCanonical } from "../lib/api/types";
 import { verifyEventAttendees } from "../lib/attendee-verification";
 import { refreshResource, upsertResourceRecords } from "../lib/cache";
@@ -39,6 +44,21 @@ const ATTENDEE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function fail(message: string): never {
 	console.error(`Error: ${message}`);
 	process.exit(1);
+}
+
+/**
+ * Parse a `--send-updates` flag value. Guest notifications default to `none`
+ * (silent) per David's standing rule.
+ */
+export function resolveSendUpdatesFlag(
+	value: unknown,
+	flagName = "--send-updates",
+): EventSendUpdates {
+	const parsed = parseSendUpdates(value);
+	if (!parsed) {
+		fail(`Invalid ${flagName} "${value}". Expected "none" or "all".`);
+	}
+	return parsed;
 }
 
 function resolveDateInput(dateInput: string | undefined): string {
@@ -105,9 +125,10 @@ export function resolveCachedEvent(events: Event[], identifier: string): Event {
 }
 
 export function validateMutableTimedGoogleEvent(event: Event): void {
-	if (event.deleted_at) fail(`Event "${event.id}" is deleted`);
-	if (event.hidden) fail(`Event "${event.id}" is hidden`);
-	if (isReadOnlyCanonical(event)) fail(`Event "${event.id}" is read-only`);
+	// Central target rejection (cancelled/deleted/read-only/hidden) with
+	// precise reasons; the v1 capability limits below are CLI-specific.
+	const targetReason = eventTargetRejectionReason(event);
+	if (targetReason) fail(`Event "${event.id}": ${targetReason}`);
 	if (event.connector_id !== "google") {
 		fail(
 			`af event supports Google calendar events only in v1. Event "${event.id}" uses connector "${event.connector_id}".`,
@@ -177,6 +198,7 @@ export interface BuildEventUpdatePayloadInput {
 	startTime: string;
 	endTime: string;
 	timezone?: string;
+	sendUpdates?: EventSendUpdates;
 	now?: string;
 }
 
@@ -188,6 +210,7 @@ export function buildEventUpdatePayload({
 	startTime,
 	endTime,
 	timezone = getLocalTimezone(),
+	sendUpdates = "none",
 	now = new Date().toISOString(),
 }: BuildEventUpdatePayloadInput): CreateEventPayload {
 	const payload = cloneEventForUpdate(event);
@@ -196,7 +219,7 @@ export function buildEventUpdatePayload({
 			? { ...event.content }
 			: {};
 
-	content.sendUpdates = "all";
+	content.sendUpdates = sendUpdates;
 	if (location !== undefined) {
 		if (location.trim()) content.location = location.trim();
 		else delete content.location;
@@ -212,23 +235,17 @@ export function buildEventUpdatePayload({
 	payload.end_date = null;
 	payload.content = content;
 	payload.global_updated_at = now;
-	Object.defineProperty(payload, "event_operation_base", {
-		value: eventOperationBase(event),
-		enumerable: false,
-		configurable: false,
-		writable: false,
-	});
 
 	return payload as unknown as CreateEventPayload;
 }
 
 export function buildEventDeletePayload({
 	event,
-	notify = "all",
+	sendUpdates = "none",
 	now = new Date().toISOString(),
 }: {
 	event: Event;
-	notify?: "all" | "none";
+	sendUpdates?: EventSendUpdates;
 	now?: string;
 }): CreateEventPayload {
 	const payload = cloneEventForUpdate(event);
@@ -237,7 +254,7 @@ export function buildEventDeletePayload({
 			? { ...event.content }
 			: {};
 
-	content.sendUpdates = notify;
+	content.sendUpdates = sendUpdates;
 	payload.status = "cancelled";
 	payload.content = content;
 	payload.deleted_at = now;
@@ -307,45 +324,44 @@ export function collectAttendeeEmails(args: Record<string, unknown>): string[] {
 	return uniqueEmails;
 }
 
-export function buildAttendeeModifierPayload({
+export interface AttendeePatchIntent {
+	/** Pre-edit provider fields (the operation base). */
+	base: Record<string, unknown>;
+	/** Desired provider fields: the full merged attendee list. */
+	changes: Record<string, unknown>;
+	sendUpdates: EventSendUpdates;
+}
+
+/**
+ * Build an attendee-list patch as a v5 patch intent. Attendee edits ride the
+ * supported v5 event_operations path (`operation: "patch"` with the full
+ * merged attendee list in `changes`); the legacy `POST /v3/events/modifiers`
+ * endpoint returns HTTP 410 and is no longer used.
+ */
+export function buildAttendeePatchIntent({
 	event,
 	add,
 	remove,
-	now = new Date().toISOString(),
-	id = crypto.randomUUID(),
+	sendUpdates = "none",
 }: {
 	event: Event;
 	add: string[];
 	remove: string[];
-	now?: string;
-	id?: string;
-}): EventModifierPayload {
-	const content: EventModifierPayload["content"] = {
-		attendeeEmailsToAdd: add,
-		attendeeEmailsToRemove: remove,
-		sendUpdates: "all",
-	};
-
-	if (add.length > 0) {
-		content.attendeeResponseStatusesByEmail = Object.fromEntries(
-			add.map((email) => [email, "needsAction"]),
-		);
-	}
-
+	sendUpdates?: EventSendUpdates;
+}): AttendeePatchIntent {
+	const removeSet = new Set(remove.map(normalizeEmail));
+	const kept = (event.attendees ?? []).filter((attendee) => {
+		const email = attendeeEmail(attendee);
+		return !email || !removeSet.has(email);
+	});
+	const added = add.map((email) => ({
+		email: normalizeEmail(email),
+		responseStatus: "needsAction",
+	}));
 	return {
-		id,
-		akiflow_account_id: event.akiflow_account_id ?? null,
-		event_id: event.id,
-		calendar_id: event.calendar_id,
-		action: "attendees/updateList",
-		content,
-		processed_at: null,
-		failed_at: null,
-		result: null,
-		attempts: 0,
-		global_created_at: now,
-		deleted_at: null,
-		global_updated_at: now,
+		base: eventOperationBase(event),
+		changes: { attendees: [...kept, ...added] },
+		sendUpdates,
 	};
 }
 
@@ -390,6 +406,10 @@ export const eventUpdateCommand = defineCommand({
 			type: "string",
 			description: "New event location; pass an empty value to clear",
 		},
+		"send-updates": {
+			type: "string",
+			description: "Guest notification mode: none (default, silent) or all",
+		},
 		verify: verifyFlag,
 		json: {
 			type: "boolean",
@@ -399,6 +419,7 @@ export const eventUpdateCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
 		// Refresh events first so the update's operation base is built from the
 		// latest server state. Without this, back-to-back updates build the
 		// second operation from stale cache and the server silently drops it.
@@ -453,17 +474,12 @@ export const eventUpdateCommand = defineCommand({
 				args.date || args.at
 					? getLocalTimezone()
 					: (event.start_datetime_tz ?? getLocalTimezone()),
+			sendUpdates,
 		});
 
 		if (args["dry-run"]) {
 			printDryRun(
-				[
-					previewItem(
-						event,
-						payload,
-						String(payload.content?.sendUpdates ?? "all"),
-					),
-				],
+				[previewItem(event, payload, sendUpdates)],
 				args.json === true,
 			);
 			return;
@@ -472,7 +488,15 @@ export const eventUpdateCommand = defineCommand({
 			payload.end_datetime_tz = event.end_datetime_tz;
 		}
 
-		const response = await client.createEvents([payload]);
+		// Explicit patch intent: the operation kind is fixed here, never
+		// inferred from the payload's status/origin_id fields.
+		const operation = buildPatchEventOperation(
+			eventOperationRoute(event),
+			eventOperationBase(event),
+			providerEventPayload(payload),
+			sendUpdates,
+		);
+		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
 		const verifications = new Map<string, VerificationResult<Event>>();
 		if (receipt?.status === "accepted" && args.verify === true) {
@@ -541,10 +565,9 @@ export const eventDeleteCommand = defineCommand({
 			description: "Event id or unique id prefix",
 			required: true,
 		},
-		notify: {
+		"send-updates": {
 			type: "string",
-			description: "Google attendee notification mode: all or none",
-			default: "all",
+			description: "Guest notification mode: none (default, silent) or all",
 		},
 		verify: verifyFlag,
 		json: {
@@ -555,10 +578,7 @@ export const eventDeleteCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
-		const notify = String(args.notify ?? "all");
-		if (notify !== "all" && notify !== "none") {
-			fail(`Invalid --notify "${notify}". Expected "all" or "none".`);
-		}
+		const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
 
 		const events = await mutationReader(args["dry-run"] === true)(
 			client,
@@ -567,21 +587,21 @@ export const eventDeleteCommand = defineCommand({
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
 
-		const payload = buildEventDeletePayload({ event, notify });
+		const payload = buildEventDeletePayload({ event, sendUpdates });
 		if (args["dry-run"]) {
 			printDryRun(
-				[
-					previewItem(
-						event,
-						payload,
-						String(payload.content?.sendUpdates ?? "all"),
-					),
-				],
+				[previewItem(event, payload, sendUpdates)],
 				args.json === true,
 			);
 			return;
 		}
-		const response = await client.createEvents([payload]);
+		// Explicit delete intent: the operation kind is fixed here, never
+		// inferred from the payload's status/deleted_at fields.
+		const operation = buildDeleteEventOperation(
+			eventOperationRoute(event),
+			sendUpdates,
+		);
+		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
 		const verifications = new Map<string, VerificationResult<Event>>();
 		if (receipt?.status === "accepted" && args.verify === true) {
@@ -625,6 +645,10 @@ async function runAttendeeCommand(
 	mode: "add" | "remove",
 ): Promise<void> {
 	const client = createClient();
+	const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
+	// Refresh before the no-op decision: attendee membership must be observed
+	// from the server, not from a possibly stale cache.
+	if (!args["dry-run"]) await refreshResource(client, "events");
 	const events = await mutationReader(args["dry-run"] === true)(
 		client,
 		"events",
@@ -648,7 +672,7 @@ async function runAttendeeCommand(
 					: [...existing].filter((email) => !toChange.includes(email)),
 		};
 		printDryRun(
-			[previewItem({ ...event, attendees: [...existing] }, after, "all")],
+			[previewItem({ ...event, attendees: [...existing] }, after, sendUpdates)],
 			args.json === true,
 		);
 		return;
@@ -680,66 +704,23 @@ async function runAttendeeCommand(
 		return;
 	}
 
-	const payload = buildAttendeeModifierPayload({
+	const intent = buildAttendeePatchIntent({
 		event,
 		add: mode === "add" ? toChange : [],
 		remove: mode === "remove" ? toChange : [],
+		sendUpdates,
 	});
-	let receipts: import("../lib/api/types").MutationReceipt[];
-	try {
-		const response = await client.createEventModifiers([payload]);
-		const checked = checkTaskMutationResult(response, [payload.id]);
-		const modifier = response.data?.find(
-			(record) => record.id === payload.id,
-		) as (EventModifierPayload & { status?: string | null }) | undefined;
-		const status =
-			checked.failedIds.includes(payload.id) ||
-			modifier?.failed_at != null ||
-			modifier?.status === "failed"
-				? "failed"
-				: !checked.ok
-					? "unknown"
-					: modifier?.status === "pending" && modifier.processed_at == null
-						? "pending"
-						: modifier?.status == null || modifier.status === "succeeded"
-							? "accepted"
-							: "unknown";
-		receipts = [
-			{
-				operation_id: payload.id,
-				event_id: event.id,
-				kind: "patch",
-				status,
-				failed_at: modifier?.failed_at ?? null,
-				processed_at: modifier?.processed_at ?? null,
-				result: modifier?.result ?? null,
-				...(checked.errors.length > 0
-					? { error: checked.errors.join("; ") }
-					: status === "failed"
-						? {
-								error: modifier?.result ?? "Server rejected attendee operation",
-							}
-						: status === "unknown"
-							? {
-									error: `Unrecognized attendee operation status: ${modifier?.status ?? "missing"}`,
-								}
-							: {}),
-			},
-		];
-	} catch (error) {
-		receipts = [
-			{
-				operation_id: payload.id,
-				event_id: event.id,
-				kind: "patch",
-				status: "unknown",
-				failed_at: null,
-				processed_at: null,
-				result: null,
-				error: error instanceof Error ? error.message : String(error),
-			},
-		];
-	}
+	// Attendee edits ride the supported v5 event_operations path as an
+	// explicit patch intent. The legacy POST /v3/events/modifiers endpoint
+	// returns HTTP 410 and is never called.
+	const operation = buildPatchEventOperation(
+		eventOperationRoute(event),
+		intent.base,
+		intent.changes,
+		intent.sendUpdates,
+	);
+	const response = await client.submitEventOperations([operation]);
+	const receipts = response.receipts;
 	const verifications = new Map<string, VerificationResult<Event>>();
 	if (args.verify === true && receipts[0]?.status === "accepted") {
 		const verification = await verifyEventAttendees(
@@ -792,6 +773,10 @@ export const attendeeAddCommand = defineCommand({
 			description: "Attendee email; additional emails may follow",
 			required: true,
 		},
+		"send-updates": {
+			type: "string",
+			description: "Guest notification mode: none (default, silent) or all",
+		},
 		verify: verifyFlag,
 		json: {
 			type: "boolean",
@@ -819,6 +804,10 @@ export const attendeeRemoveCommand = defineCommand({
 			type: "positional",
 			description: "Attendee email; additional emails may follow",
 			required: true,
+		},
+		"send-updates": {
+			type: "string",
+			description: "Guest notification mode: none (default, silent) or all",
 		},
 		verify: verifyFlag,
 		json: {

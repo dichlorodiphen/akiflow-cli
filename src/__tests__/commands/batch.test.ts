@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
 	buildBatchReport,
-	classifyBatchModifierResults,
 	classifyBatchResults,
 	mutableTimedGoogleEventSkipReason,
 	planEventAttendeeBatch,
@@ -10,6 +9,7 @@ import {
 	selectBatchEvents,
 	selectBatchSlots,
 } from "../../commands/batch";
+import { parseEventMutationResult } from "../../lib/api/mutation-results";
 import type { Calendar, Event, TimeSlot } from "../../lib/api/types";
 
 function calendar(overrides: Partial<Calendar> = {}): Calendar {
@@ -92,47 +92,62 @@ describe("batch command helpers", () => {
 		]);
 	});
 
-	it("matches modifier failures by operation id while unmentioned event operations stay unknown", () => {
-		const payloads = planEventAttendeeBatch(
+	it("matches operation failures by operation id while unmentioned operations stay unknown", () => {
+		const operations = planEventAttendeeBatch(
 			[event({ id: "first" }), event({ id: "second" })],
 			["new@example.com"],
 			"add",
 		).map((item) => item.payload!);
-		const { receipts } = classifyBatchModifierResults(payloads, {
-			success: false,
-			message: "Partial failure",
-			data: [],
-			failed: [{ id: payloads[0]!.id, error: "Denied" }],
-		});
-		expect(receipts).toMatchObject([
+		const result = parseEventMutationResult(
 			{
-				operation_id: payloads[0]!.id,
+				success: false,
+				message: "Partial failure",
+				data: [],
+				failed: [{ id: operations[0]!.id, error: "Denied" }],
+			} as never,
+			operations,
+		);
+		// Empty result data means the envelope cannot confirm per-operation
+		// outcomes: nothing is invented as accepted or failed, but the
+		// matched failure detail is preserved on the receipt.
+		expect(result.receipts).toMatchObject([
+			{
+				operation_id: operations[0]!.id,
 				event_id: "first",
-				status: "failed",
-				error: "Denied",
+				status: "unknown",
+				error: ["Partial failure", "Denied"],
 			},
-			{ operation_id: payloads[1]!.id, event_id: "second", status: "unknown" },
+			{
+				operation_id: operations[1]!.id,
+				event_id: "second",
+				status: "unknown",
+				error: "Partial failure",
+			},
 		]);
+		expect(result.allAccepted).toBe(false);
 	});
 
-	it("retains modifier processing receipts and honors failed_at and explicit pending", () => {
-		const payloads = planEventAttendeeBatch(
+	it("retains operation processing receipts and honors failed_at and explicit pending", () => {
+		const operations = planEventAttendeeBatch(
 			[event({ id: "first" }), event({ id: "second" })],
 			["new@example.com"],
 			"add",
 		).map((item) => item.payload!);
-		const result = classifyBatchModifierResults(payloads, {
-			success: true,
-			message: null,
-			data: [
-				{
-					...payloads[0]!,
-					failed_at: "2026-09-30T10:00:00Z",
-					result: "Rejected",
-				},
-				{ ...payloads[1]!, ...({ status: "pending" } as object) },
-			],
-		});
+		const result = parseEventMutationResult(
+			{
+				success: true,
+				message: null,
+				data: [
+					{
+						...operations[0]!,
+						failed_at: "2026-09-30T10:00:00Z",
+						result: "Rejected",
+					},
+					{ ...operations[1]!, ...({ status: "pending" } as object) },
+				],
+			} as never,
+			operations,
+		);
 		expect(result.receipts.map((receipt) => receipt.status)).toEqual([
 			"failed",
 			"pending",
@@ -183,14 +198,21 @@ describe("batch command helpers", () => {
 		);
 
 		expect(planned.map((item) => item.action)).toEqual(["change", "noop"]);
-		expect(planned[0]?.payload?.content).toEqual({
-			attendeeEmailsToAdd: ["julia@example.com"],
-			attendeeEmailsToRemove: [],
-			attendeeResponseStatusesByEmail: {
-				"julia@example.com": "needsAction",
-			},
-			sendUpdates: "all",
-		});
+		expect(planned[0]?.payload).toEqual(
+			expect.objectContaining({
+				event_id: "event-123",
+				operation: "patch",
+				payload: expect.objectContaining({
+					changes: expect.objectContaining({
+						attendees: [
+							{ email: "pat@example.com" },
+							{ email: "julia@example.com", responseStatus: "needsAction" },
+						],
+					}),
+					send_updates: false,
+				}),
+			}),
+		);
 	});
 
 	it("skips non-mutable event records instead of failing the whole batch", () => {
@@ -209,17 +231,18 @@ describe("batch command helpers", () => {
 		]);
 	});
 
-	it("builds event delete payloads with the captured single-event shape", () => {
+	it("builds explicit delete operations with silent notification policy", () => {
 		const planned = planEventDeleteBatch([event()], "none");
 
 		expect(planned[0]?.action).toBe("change");
 		expect(planned[0]?.payload).toEqual(
 			expect.objectContaining({
-				id: "event-123",
-				status: "cancelled",
-				deleted_at: expect.any(String),
-				global_updated_at: expect.any(String),
-				content: { sendUpdates: "none" },
+				event_id: "event-123",
+				connector_id: "google",
+				account_id: "account-123",
+				calendar_id: "cal-123",
+				operation: "delete",
+				payload: { send_updates: false },
 			}),
 		);
 	});

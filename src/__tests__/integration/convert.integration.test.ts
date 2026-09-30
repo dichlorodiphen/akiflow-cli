@@ -158,6 +158,8 @@ describe("af convert tasks --to events (BDD)", () => {
 						start_time: "2026-06-22T18:30:00.000Z",
 						end_time: "2026-06-22T19:30:00.000Z",
 					}),
+					// Conversions are silent by default: no guest invite spam.
+					send_updates: false,
 				},
 			}),
 		);

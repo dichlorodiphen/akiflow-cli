@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import {
+	buildCreateEventOperation,
+	type EventSendUpdates,
+	parseSendUpdates,
+} from "../lib/api/event-intents";
 import type {
 	Calendar,
 	CreateEventPayload,
@@ -89,6 +94,7 @@ export interface BuildEventPayloadInput {
 	calendar: Calendar;
 	location?: string;
 	id?: string;
+	sendUpdates?: EventSendUpdates;
 	now?: string;
 }
 
@@ -101,9 +107,10 @@ export function buildCreateEventPayload({
 	calendar,
 	location,
 	id,
+	sendUpdates = "none",
 	now,
 }: BuildEventPayloadInput): CreateEventPayload {
-	const content: Record<string, unknown> = { sendUpdates: "all" };
+	const content: Record<string, unknown> = { sendUpdates };
 	if (location?.trim()) content.location = location.trim();
 	const timestamp = now ?? new Date().toISOString();
 	const organizerId = calendar.origin_id || null;
@@ -612,6 +619,10 @@ export const createEventCommand = defineCommand({
 			type: "string",
 			description: "Event location",
 		},
+		"send-updates": {
+			type: "string",
+			description: "Guest notification mode: none (default, silent) or all",
+		},
 		verify: verifyFlag,
 		json: {
 			type: "boolean",
@@ -621,6 +632,14 @@ export const createEventCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		const parsedSendUpdates = parseSendUpdates(args["send-updates"]);
+		if (!parsedSendUpdates) {
+			console.error(
+				`Error: Invalid --send-updates "${args["send-updates"]}". Expected "none" or "all".`,
+			);
+			process.exit(1);
+		}
+		const sendUpdates: EventSendUpdates = parsedSendUpdates;
 		const title = args.title as string;
 		const date = resolveDate(args);
 		const at = args.at as string;
@@ -664,13 +683,20 @@ export const createEventCommand = defineCommand({
 			timezone,
 			calendar,
 			location,
+			sendUpdates,
 		});
 
 		if (args["dry-run"]) {
-			printDryRun([previewItem(null, eventPayload, "all")], args.json === true);
+			printDryRun(
+				[previewItem(null, eventPayload, sendUpdates)],
+				args.json === true,
+			);
 			return;
 		}
-		const response = await client.createEvents([eventPayload]);
+		// Explicit create intent: the operation kind is fixed here, never
+		// inferred from the payload's status/origin_id fields.
+		const operation = buildCreateEventOperation(eventPayload, sendUpdates);
+		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
 		const verification =
 			receipt?.status === "accepted" && args.verify === true

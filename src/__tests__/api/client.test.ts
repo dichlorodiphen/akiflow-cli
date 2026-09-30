@@ -1,6 +1,7 @@
 /// <reference types="bun" />
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { AkiflowClient, createClient } from "../../lib/api/client";
+import { buildCreateEventOperation } from "../../lib/api/event-intents";
 import { AuthError, NetworkError } from "../../lib/api/types";
 import * as storage from "../../lib/auth/storage";
 
@@ -387,8 +388,8 @@ describe("AkiflowClient", () => {
 		});
 	});
 
-	describe("createEvents", () => {
-		it("sends a create operation to the v5 event operations endpoint", async () => {
+	describe("submitEventOperations", () => {
+		it("sends an explicit create operation with send_updates to the v5 endpoint", async () => {
 			// given
 			fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
 				Object.assign(
@@ -461,7 +462,9 @@ describe("AkiflowClient", () => {
 			};
 
 			// when
-			const result = await client.createEvents([eventPayload]);
+			const result = await client.submitEventOperations([
+				buildCreateEventOperation(eventPayload),
+			]);
 
 			// then
 			expect(fetchSpy).toHaveBeenCalledWith(
@@ -490,6 +493,7 @@ describe("AkiflowClient", () => {
 							start_time: eventPayload.start_time,
 							end_time: eventPayload.end_time,
 						}),
+						send_updates: false,
 					},
 				}),
 			);
@@ -509,64 +513,6 @@ describe("AkiflowClient", () => {
 			expect(result.raw.data[0]?.id).toBe(operations[0].id);
 			expect("data" in result).toBe(false);
 			expect("success" in result).toBe(false);
-		});
-	});
-
-	describe("createEventModifiers", () => {
-		it("sends POST request to the captured v3 event modifiers endpoint", async () => {
-			// given
-			const mockResponse = {
-				success: true,
-				message: null,
-				data: [
-					{
-						id: "modifier-123",
-						event_id: "event-123",
-						action: "attendees/updateList",
-					},
-				],
-			};
-			fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-				new Response(JSON.stringify(mockResponse), { status: 200 }),
-			);
-			const client = createClient();
-			const modifierPayload = {
-				id: "modifier-123",
-				akiflow_account_id: "akiflow-account-1",
-				event_id: "event-123",
-				calendar_id: "cal-123",
-				action: "attendees/updateList" as const,
-				content: {
-					attendeeEmailsToAdd: ["julia@example.com"],
-					attendeeEmailsToRemove: [],
-					attendeeResponseStatusesByEmail: {
-						"julia@example.com": "needsAction",
-					},
-					sendUpdates: "all" as const,
-				},
-				processed_at: null,
-				failed_at: null,
-				result: null,
-				attempts: 0,
-				global_created_at: "2026-06-19T22:42:58.271Z",
-				deleted_at: null,
-				global_updated_at: "2026-06-19T22:42:58.271Z",
-			};
-
-			// when
-			await client.createEventModifiers([modifierPayload]);
-
-			// then
-			expect(fetchSpy).toHaveBeenCalledWith(
-				"https://api.akiflow.com/v3/events/modifiers",
-				expect.objectContaining({
-					method: "POST",
-					headers: expect.objectContaining({
-						"Content-Type": "application/json",
-					}),
-					body: JSON.stringify([modifierPayload]),
-				}),
-			);
 		});
 	});
 

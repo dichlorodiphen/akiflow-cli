@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
 	attendeeAddCommand,
 	attendeeRemoveCommand,
-	buildAttendeeModifierPayload,
+	buildAttendeePatchIntent,
 	buildEventDeletePayload,
 	buildEventUpdatePayload,
 	eventDeleteCommand,
@@ -146,7 +146,7 @@ describe("event command", () => {
 		expect(payload.content).toEqual({
 			location: "New gate",
 			color: "blue",
-			sendUpdates: "all",
+			sendUpdates: "none",
 		});
 		expect(payload.data).toBeUndefined();
 		expect(payload.fingerprints).toBeUndefined();
@@ -157,7 +157,7 @@ describe("event command", () => {
 		const source = event();
 		const payload = buildEventDeletePayload({
 			event: source,
-			notify: "none",
+			sendUpdates: "none",
 			now: "2026-06-19T12:00:00.000Z",
 		}) as unknown as Record<string, unknown>;
 
@@ -233,6 +233,7 @@ describe("event command", () => {
 						location: "PDX",
 						attendees: event().attendees,
 					}),
+					send_updates: false,
 				},
 			}),
 		);
@@ -323,7 +324,7 @@ describe("event command", () => {
 		consoleLogSpy.mockRestore();
 	});
 
-	it("deletes a cached event through /v5/event_operations and notifies by default", async () => {
+	it("deletes a cached event through /v5/event_operations and stays silent by default", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		fetchSpy.mockResolvedValueOnce(
 			new Response(
@@ -361,7 +362,7 @@ describe("event command", () => {
 			expect.objectContaining({
 				event_id: "event-123456",
 				operation: "delete",
-				payload: { send_updates: true },
+				payload: { send_updates: false },
 				global_updated_at: expect.any(String),
 			}),
 		);
@@ -389,7 +390,7 @@ describe("event command", () => {
 			eventDeleteCommand.run!({
 				args: {
 					id: "event-123456",
-					notify: "none",
+					"send-updates": "none",
 					json: true,
 					_: [],
 				},
@@ -506,50 +507,51 @@ describe("event command", () => {
 		).not.toThrow();
 	});
 
-	it("builds attendee modifier payloads for additions", () => {
-		const payload = buildAttendeeModifierPayload({
+	it("builds an attendee patch intent with merged attendee list and silent default", () => {
+		const intent = buildAttendeePatchIntent({
 			event: event(),
 			add: ["julia@example.com"],
 			remove: [],
-			id: "modifier-1",
-			now: "2026-06-19T12:00:00.000Z",
 		});
 
-		expect(payload).toEqual({
-			id: "modifier-1",
-			akiflow_account_id: "akiflow-account-1",
-			event_id: "event-123456",
-			calendar_id: "cal-123",
-			action: "attendees/updateList",
-			content: {
-				attendeeEmailsToAdd: ["julia@example.com"],
-				attendeeEmailsToRemove: [],
-				attendeeResponseStatusesByEmail: {
-					"julia@example.com": "needsAction",
-				},
-				sendUpdates: "all",
-			},
-			processed_at: null,
-			failed_at: null,
-			result: null,
-			attempts: 0,
-			global_created_at: "2026-06-19T12:00:00.000Z",
-			deleted_at: null,
-			global_updated_at: "2026-06-19T12:00:00.000Z",
+		expect(intent.sendUpdates).toBe("none");
+		expect(intent.changes).toEqual({
+			attendees: [
+				{ email: "pat@example.com", name: "Pat", response: "accepted" },
+				{ email: "julia@example.com", responseStatus: "needsAction" },
+			],
 		});
+		expect(intent.base).toEqual(
+			expect.objectContaining({ title: "Portland trip: flight" }),
+		);
 	});
 
-	it("adds multiple attendee emails through /v3/events/modifiers", async () => {
+	it("builds an attendee patch intent that removes by email", () => {
+		const intent = buildAttendeePatchIntent({
+			event: event(),
+			add: [],
+			remove: ["Pat@Example.com"],
+			sendUpdates: "all",
+		});
+
+		expect(intent.sendUpdates).toBe("all");
+		expect(intent.changes).toEqual({ attendees: [] });
+	});
+
+	it("adds multiple attendee emails through a v5 patch operation, never the 410 modifiers endpoint", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
-		fetchSpy.mockResolvedValueOnce(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "modifier-created", event_id: "event-123456" }],
-				}),
-				{ status: 200 },
-			),
+		fetchSpy.mockImplementationOnce(
+			async (_url: unknown, init?: RequestInit) => {
+				const operations = JSON.parse(String(init?.body));
+				return new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ ...operations[0], status: "succeeded", user_id: 1 }],
+					}),
+					{ status: 200 },
+				);
+			},
 		);
 
 		await attendeeAddCommand.run!({
@@ -564,26 +566,39 @@ describe("event command", () => {
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-			"https://api.akiflow.com/v3/events/modifiers",
+			"https://api.akiflow.com/v5/event_operations",
 		);
-		const payload = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
-		expect(payload[0].content).toEqual({
-			attendeeEmailsToAdd: ["julia@example.com", "alex@example.com"],
-			attendeeEmailsToRemove: [],
-			attendeeResponseStatusesByEmail: {
-				"julia@example.com": "needsAction",
-				"alex@example.com": "needsAction",
-			},
-			sendUpdates: "all",
-		});
-		expect(consoleLogSpy).not.toHaveBeenCalled();
-		expect(process.exitCode).toBe(1);
-		process.exitCode = 0;
+		for (const call of fetchSpy.mock.calls) {
+			expect(String(call[0])).not.toContain("/v3/events/modifiers");
+		}
+		const operations = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
+		expect(operations[0]).toEqual(
+			expect.objectContaining({
+				event_id: "event-123456",
+				operation: "patch",
+				payload: {
+					base: expect.any(Object),
+					changes: {
+						attendees: [
+							{ email: "pat@example.com", name: "Pat", response: "accepted" },
+							{ email: "julia@example.com", responseStatus: "needsAction" },
+							{ email: "alex@example.com", responseStatus: "needsAction" },
+						],
+					},
+					send_updates: false,
+				},
+			}),
+		);
+		// Accepted receipts print the mutation envelope; success is never claimed.
+		expect(consoleLogSpy).toHaveBeenCalledWith(
+			expect.stringContaining("✓ Operation accepted"),
+		);
+		expect(process.exitCode).toBe(0);
 
 		consoleLogSpy.mockRestore();
 	});
 
-	it("never accepts aggregate-failed modifiers and preserves pending/failed status", async () => {
+	it("never accepts aggregate-failed operations and preserves pending/failed status", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const cases = [
 			{ success: false, status: "succeeded", expected: "unknown" },
@@ -692,17 +707,20 @@ describe("event command", () => {
 		consoleLogSpy.mockRestore();
 	});
 
-	it("removes existing attendee emails through /v3/events/modifiers", async () => {
+	it("removes existing attendee emails through a silent v5 patch operation", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
-		fetchSpy.mockResolvedValueOnce(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "modifier-created", event_id: "event-123456" }],
-				}),
-				{ status: 200 },
-			),
+		fetchSpy.mockImplementationOnce(
+			async (_url: unknown, init?: RequestInit) => {
+				const operations = JSON.parse(String(init?.body));
+				return new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ ...operations[0], status: "succeeded", user_id: 1 }],
+					}),
+					{ status: 200 },
+				);
+			},
 		);
 
 		await attendeeRemoveCommand.run!({
@@ -715,12 +733,25 @@ describe("event command", () => {
 			rawArgs: [],
 		} as any);
 
-		const payload = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
-		expect(payload[0].content).toEqual({
-			attendeeEmailsToAdd: [],
-			attendeeEmailsToRemove: ["pat@example.com"],
-			sendUpdates: "all",
-		});
+		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+			"https://api.akiflow.com/v5/event_operations",
+		);
+		for (const call of fetchSpy.mock.calls) {
+			expect(String(call[0])).not.toContain("/v3/events/modifiers");
+		}
+		const operations = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
+		expect(operations[0]).toEqual(
+			expect.objectContaining({
+				event_id: "event-123456",
+				operation: "patch",
+				payload: {
+					base: expect.any(Object),
+					changes: { attendees: [] },
+					send_updates: false,
+				},
+			}),
+		);
+		expect(process.exitCode).toBe(0);
 		consoleLogSpy.mockRestore();
 	});
 });

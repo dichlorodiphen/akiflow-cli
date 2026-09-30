@@ -7,7 +7,7 @@ export async function expectReceiptOnlyCommandFailure(action: () => unknown) {
 	const exit = spyOn(process, "exit").mockImplementation(() => {
 		throw new Error("receipt-only exit");
 	});
-	const mutation = spyOn(AkiflowClient.prototype, "createEvents");
+	const mutation = spyOn(AkiflowClient.prototype, "submitEventOperations");
 	try {
 		await Promise.resolve().then(action);
 		expect(process.exitCode).toBe(1);
@@ -16,7 +16,7 @@ export async function expectReceiptOnlyCommandFailure(action: () => unknown) {
 			?.value as Promise<MutationResult>);
 		expect(result.receipts).toHaveLength(1);
 		expect(result.receipts[0]?.event_id).toBe(
-			mutation.mock.calls[0]?.[0]?.[0]?.id,
+			mutation.mock.calls[0]?.[0]?.[0]?.event_id,
 		);
 		expect(result.receipts[0]?.status).toBe("unknown");
 		expect(result.allAccepted).toBe(false);

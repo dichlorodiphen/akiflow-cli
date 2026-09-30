@@ -110,7 +110,7 @@ Project listing is read-only:
 af project list
 ```
 
-Event deletion supports `af event delete <event-id> --notify all|none --dry-run`; default notifications are `all`. Slot update/delete also accept `--dry-run`.
+Event mutations support `--send-updates none|all`; guest notifications default to `none` (silent). Slot update/delete also accept `--dry-run`.
 
 Known gaps: all-day events, recurring events, reminders, conferencing, Aki chat messages, and project mutation are unsupported.
 

@@ -3,11 +3,8 @@ import { parseEventMutationResult } from "./mutation-results";
 import type {
 	AkiflowCredentials,
 	ApiResponse,
-	CreateEventPayload,
 	CreateTaskPayload,
 	CreateTimeSlotPayload,
-	EventModifier,
-	EventModifierPayload,
 	EventOperation,
 	EventOperationPayload,
 	Label,
@@ -30,89 +27,6 @@ const WEB_CLIENT_ID = "10";
 const DEFAULT_VERSION = "3";
 const DEFAULT_PLATFORM = "web";
 const DEFAULT_LIMIT = 2500;
-
-function eventLocation(event: CreateEventPayload): string | null {
-	const location = event.content?.location;
-	return typeof location === "string" && location.trim()
-		? location.trim()
-		: null;
-}
-
-function providerEventPayload(
-	event: CreateEventPayload,
-): Record<string, unknown> {
-	const payload: Record<string, unknown> = {
-		title: event.title,
-		description: event.description,
-		start_time: event.start_time,
-		end_time: event.end_time,
-		start_datetime_tz: event.start_datetime_tz,
-	};
-
-	if (event.end_datetime_tz) {
-		payload.end_datetime_tz = event.end_datetime_tz;
-	}
-
-	const location = eventLocation(event);
-	if (location) payload.location = location;
-
-	if (event.attendees.length > 0) payload.attendees = event.attendees;
-	if (
-		Array.isArray(event.recurrence)
-			? event.recurrence.length > 0
-			: event.recurrence
-	) {
-		payload.recurrence = event.recurrence;
-	}
-
-	return payload;
-}
-
-function eventOperationFromLegacyPayload(
-	event: CreateEventPayload,
-	clientOrder: number,
-): EventOperationPayload {
-	if (!event.akiflow_account_id) {
-		throw new NetworkError(
-			`Event "${event.id}" is missing its Akiflow account id`,
-		);
-	}
-
-	const timestamp = event.global_updated_at || new Date().toISOString();
-	let operation: EventOperationPayload["operation"];
-	let payload: Record<string, unknown>;
-
-	if (event.deleted_at || event.status === "cancelled") {
-		operation = "delete";
-		payload = {
-			send_updates: event.content?.sendUpdates !== "none",
-		};
-	} else if (!event.origin_id) {
-		operation = "create";
-		payload = { event: providerEventPayload(event) };
-	} else {
-		operation = "patch";
-		const changes = providerEventPayload(event);
-		payload = { base: event.event_operation_base ?? changes, changes };
-	}
-
-	return {
-		id: crypto.randomUUID(),
-		event_id: event.id,
-		connector_id: event.connector_id,
-		account_id: event.akiflow_account_id,
-		calendar_id: event.calendar_id,
-		operation,
-		payload,
-		result: null,
-		processed_at: null,
-		failed_at: null,
-		client_order: clientOrder,
-		global_created_at: timestamp,
-		deleted_at: null,
-		global_updated_at: timestamp,
-	};
-}
 
 export interface AkiflowClientOptions {
 	credentials?: AkiflowCredentials;
@@ -424,10 +338,14 @@ export class AkiflowClient {
 		return this.request<TimeSlot[]>("PATCH", "/v5/time_slots", timeSlots);
 	}
 
-	async createEvents(events: CreateEventPayload[]): Promise<MutationResult> {
-		const operations = events.map((event, index) =>
-			eventOperationFromLegacyPayload(event, index),
-		);
+	/**
+	 * Submit pre-built v5 event operations. Operation kinds are fixed by the
+	 * explicit intent constructors in ./event-intents; this method never
+	 * infers create/patch/delete from payload fields.
+	 */
+	async submitEventOperations(
+		operations: EventOperationPayload[],
+	): Promise<MutationResult> {
 		try {
 			const response = await this.request<EventOperation[]>(
 				"POST",
@@ -447,16 +365,6 @@ export class AkiflowClient {
 				operations,
 			);
 		}
-	}
-
-	async createEventModifiers(
-		modifiers: EventModifierPayload[],
-	): Promise<ApiResponse<EventModifier[]>> {
-		return this.request<EventModifier[]>(
-			"POST",
-			"/v3/events/modifiers",
-			modifiers,
-		);
 	}
 }
 

@@ -1,5 +1,6 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import { buildCreateEventOperation } from "../lib/api/event-intents";
 import { checkTaskMutationResult } from "../lib/api/task-results";
 import type {
 	CreateEventPayload,
@@ -459,8 +460,12 @@ export const convertTasksCommand = defineCommand({
 		const toCreate = candidates.filter((candidate) => !candidate.match);
 		const receipts: MutationReceipt[] = toCreate.length
 			? (
-					await client.createEvents(
-						toCreate.map((candidate) => candidate.payload),
+					await client.submitEventOperations(
+						toCreate.map((candidate, index) =>
+							// Explicit create intents (default silent); the operation
+							// kind is fixed here, never inferred from payload fields.
+							buildCreateEventOperation(candidate.payload, "none", index),
+						),
 					)
 				).receipts
 			: [];
