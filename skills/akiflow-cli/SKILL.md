@@ -6,7 +6,7 @@ metadata: {"openclaw":{"emoji":"📋","requires":{"bins":["af"]}}}
 
 # Akiflow CLI
 
-Use `af` for Akiflow task and calendar work. Prefer `--json --envelope` for reads and parse the cleaned `result` array. Check `schema_version: 1`, `status`, `errors`, and `warnings`; `meta` carries the snapshot and exit code. Legacy JSON remains default with a stderr migration announcement; `AF_JSON_ENVELOPE=1` opts in globally ahead of the announced default flip. Run `af refresh --json` when the user asks for the latest state or after mutations that need verification.
+Use `af` for Akiflow task and calendar work. Prefer `--json --envelope` for reads and parse the cleaned `result` array. Check `schema_version: 1`, `status`, `errors`, and `warnings`; `meta` carries the snapshot and exit code. Legacy JSON remains default with a stderr migration announcement; `AF_JSON_ENVELOPE=1` opts in globally ahead of the announced default flip. Run `af refresh --json` when the user asks for the latest state or after mutations that need verification. Use mutation `--verify` for field confirmation.
 
 Dates are local calendar dates. Use explicit `YYYY-MM-DD` in commands and reports. Invalid task-list/cal selectors error rather than broadening the selection or substituting today. Unknown flags/commands and extra positionals fail before auth/cache access (exit 2). Completions are generated from the CLI command tree.
 
@@ -115,3 +115,11 @@ Event deletion supports `af event delete <event-id> --notify all|none --dry-run`
 Known gaps: all-day events, recurring events, reminders, conferencing, Aki chat messages, and project mutation are unsupported.
 
 For Southwest flight rechecks, use Chrome on `https://www.southwest.com/air/flight-status/path?departureDate=YYYY-MM-DD&flightNumber=N`, trust the rendered Southwest status, then update dependent Akiflow events with `af event update`.
+
+## Interpret Mutation Outcomes
+
+Mutation JSON is a receipt envelope with `schema_version: 1`, `command`, `status`, `receipts`, `result`, `errors`, and `warnings`. Parse the receipts and status before reporting an outcome. `accepted` means submitted, not confirmed; never describe it as created/updated/deleted successfully. Failed, unknown, pending, mismatch, timeout, and partial task outcomes exit non-zero. Preserve operation IDs for diagnosis.
+
+Add `--verify` to event create/update/delete and event attendees add/remove, task create/update/plan/snooze/complete/delete, slot create, batch events mutations, and executed task-to-event conversions when confirmation is needed. Verification uses fresh Akiflow reads, compares requested fields and time/zone, and defaults to a 15-second timeout. `verified` confirms observed Akiflow state, not provider state. Timeout claims no success. Never automatically rerun a write after an unknown outcome; inspect fresh records first.
+
+Conversion with `--delete-source` verifies every target before deleting any source. If one target is unverified, all sources remain and the command exits non-zero. Preview remains the default.

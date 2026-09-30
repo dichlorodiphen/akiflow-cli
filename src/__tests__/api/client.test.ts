@@ -390,24 +390,25 @@ describe("AkiflowClient", () => {
 	describe("createEvents", () => {
 		it("sends a create operation to the v5 event operations endpoint", async () => {
 			// given
-			const mockResponse = {
-				success: true,
-				message: null,
-				data: [
-					{
-						id: "event-123",
-						title: "Meeting",
-						calendar_id: "cal-123",
-						start_time: "2026-06-20T16:00:00.000Z",
-						end_time: "2026-06-20T16:30:00.000Z",
-						status: "confirmed",
-						global_updated_at: "2026-06-19T22:42:58.271Z",
-						deleted_at: null,
+			fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+				Object.assign(
+					async (_url: unknown, init?: RequestInit) => {
+						const submitted = JSON.parse(String(init?.body));
+						return new Response(
+							JSON.stringify({
+								success: true,
+								message: null,
+								data: submitted.map((operation: { id: string }) => ({
+									...operation,
+									user_id: 1,
+									status: "pending",
+								})),
+							}),
+							{ status: 200 },
+						);
 					},
-				],
-			};
-			fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-				new Response(JSON.stringify(mockResponse), { status: 200 }),
+					{ preconnect() {} },
+				),
 			);
 			const client = createClient();
 			const eventPayload = {
@@ -460,7 +461,7 @@ describe("AkiflowClient", () => {
 			};
 
 			// when
-			await client.createEvents([eventPayload]);
+			const result = await client.createEvents([eventPayload]);
 
 			// then
 			expect(fetchSpy).toHaveBeenCalledWith(
@@ -493,6 +494,21 @@ describe("AkiflowClient", () => {
 				}),
 			);
 			expect(typeof operations[0].id).toBe("string");
+			expect(result.receipts).toEqual([
+				{
+					operation_id: operations[0].id,
+					event_id: eventPayload.id,
+					kind: "create",
+					status: "pending",
+					failed_at: null,
+					processed_at: null,
+					result: null,
+				},
+			]);
+			expect(result.allAccepted).toBe(false);
+			expect(result.raw.data[0]?.id).toBe(operations[0].id);
+			expect("data" in result).toBe(false);
+			expect("success" in result).toBe(false);
 		});
 	});
 

@@ -11,7 +11,14 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-
+	server.respondTo("POST", "/v5/event_operations", (req: { body: string }) => {
+		const payload = JSON.parse(req.body);
+		return {
+			success: true,
+			message: null,
+			data: payload,
+		};
+	});
 	server.respondTo("POST", "/v3/events/modifiers", (req: { body: string }) => {
 		const payload = JSON.parse(req.body);
 		return {
@@ -36,8 +43,8 @@ describe("af event (BDD)", () => {
 		});
 		expect(refresh.exitCode).toBe(0);
 
-		const expectedStart = new Date(2026, 4, 21, 10, 30).toISOString();
-		const expectedEnd = new Date(2026, 4, 21, 11, 15).toISOString();
+		const expectedStart = new Date(Date.UTC(2026, 4, 21, 10, 30)).toISOString();
+		const expectedEnd = new Date(Date.UTC(2026, 4, 21, 11, 15)).toISOString();
 		const result = await spawnCli(
 			[
 				"event",
@@ -59,20 +66,10 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const updatedEvent = JSON.parse(result.stdout);
-		expect(updatedEvent.id).toBe("event-meeting-1");
-		expect(updatedEvent.start_time).toBe(expectedStart);
-		expect(updatedEvent.end_time).toBe(expectedEnd);
-		expect(
-			server.snapshot("events").find((row) => row.id === "event-meeting-1"),
-		).toMatchObject({
-			start_time: expectedStart,
-			end_time: expectedEnd,
-			content: { location: "Room 12" },
-			attendees: [
-				{ email: "pat@example.com", name: "Pat", response: "accepted" },
-			],
-		});
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.receipts[0].event_id).toBe("event-meeting-1");
+		expect(envelope.receipts[0].kind).toBe("patch");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
@@ -98,14 +95,10 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const deletedEvent = JSON.parse(result.stdout);
-		expect(deletedEvent.id).toBe("event-meeting-1");
-		expect(deletedEvent.status).toBe("cancelled");
-		expect(deletedEvent.deleted_at).toEqual(expect.any(String));
-		expect(server.snapshot("events")[0]).toMatchObject({
-			status: "cancelled",
-			deleted_at: expect.any(String),
-		});
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.receipts[0].event_id).toBe("event-meeting-1");
+		expect(envelope.receipts[0].kind).toBe("delete");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
@@ -143,18 +136,10 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const modifier = JSON.parse(result.stdout);
-		expect(modifier.event_id).toBe("event-meeting-1");
-		expect(modifier.action).toBe("attendees/updateList");
-		expect(modifier.content).toEqual({
-			attendeeEmailsToAdd: ["julia@example.com", "alex@example.com"],
-			attendeeEmailsToRemove: [],
-			attendeeResponseStatusesByEmail: {
-				"julia@example.com": "needsAction",
-				"alex@example.com": "needsAction",
-			},
-			sendUpdates: "all",
-		});
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.schema_version).toBe(1);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.receipts[0].event_id).toBe("event-meeting-1");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v3/events/modifiers",
@@ -185,7 +170,7 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual(
+		expect(JSON.parse(result.stdout).result).toEqual(
 			expect.objectContaining({
 				event_id: "event-meeting-1",
 				action: "add",

@@ -75,6 +75,23 @@ const resources: Resource[] = [
 	"contacts",
 ];
 export class DroppedConnection extends Error {}
+
+/**
+ * Sentinel a responder can return (or a responder function can return) to
+ * simulate the server dropping the connection mid-request — e.g. a crash
+ * after applying a write. The request is still recorded; the client sees a
+ * transport failure rather than an HTTP status.
+ */
+export const DROP_CONNECTION = Symbol("fake-server/drop-connection");
+
+/**
+ * IPC-transport fallback hook (Workstream A). The behavioral server binds a
+ * real loopback socket, so there is no IPC directory; this always returns
+ * undefined and the `AF_TEST_IPC_DIR` path in test-env stays inert.
+ */
+export function fakeServerIpcDir(_url: string): string | undefined {
+	return undefined;
+}
 const copy = <T>(value: T): T => structuredClone(value);
 const json = (
 	value: unknown,
@@ -673,13 +690,15 @@ export class FakeAkiflowServer {
 		const override = this.responders.findLast(
 			(r) => r.method === req.method && r.path === path,
 		);
-		if (override)
-			return json(
+		if (override) {
+			const value =
 				typeof override.response === "function"
 					? await override.response(req)
-					: override.response,
-				override.status,
-			);
+					: override.response;
+			if (value === DROP_CONNECTION)
+				throw new DroppedConnection("Connection dropped");
+			return json(value, override.status);
+		}
 		if (req.method === "POST" && path === "/v5/event_operations") {
 			const inputs = JSON.parse(req.body) as EventOperationPayload[];
 			const data = inputs.map((op) => this.submitOperation(op, forceApply));

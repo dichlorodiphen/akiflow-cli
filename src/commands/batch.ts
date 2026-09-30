@@ -1,14 +1,19 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import { checkTaskMutationResult } from "../lib/api/task-results";
 import type {
+	ApiResponse,
 	Calendar,
 	CreateEventPayload,
 	Event,
-	EventModifier,
 	EventModifierPayload,
+	MutationReceipt,
 	TimeSlot,
 	UpdateTimeSlotPayload,
 } from "../lib/api/types";
+import { isReadOnlyCanonical } from "../lib/api/types";
+import { verifyEventAttendees } from "../lib/attendee-verification";
+import { refreshResource, upsertResourceRecords } from "../lib/cache";
 import {
 	CalendarResolutionError,
 	resolveCalendarFromList,
@@ -22,8 +27,15 @@ import {
 	startOfDay,
 } from "../lib/date-parser";
 import { dryRunArgs, mutationReader, previewItem } from "../lib/dry-run";
+import { classifyExit } from "../lib/output-contract";
 import { EXIT_CODES } from "../lib/exit-codes";
 import { filterEvents } from "../lib/filters/event";
+import { outputMutation } from "../lib/mutation-output";
+import {
+	type VerificationResult,
+	verifyEventDeleted,
+} from "../lib/verification";
+import { verificationOptions } from "../lib/verify-flag";
 import {
 	buildAttendeeModifierPayload,
 	buildEventDeletePayload,
@@ -57,7 +69,17 @@ const EVENT_SELECTOR_FLAGS = [
 const SLOT_SELECTOR_FLAGS = ["date", "from", "until", "calendar", "search"];
 
 type BatchMode = "dry-run" | "execute";
-type BatchItemAction = "change" | "noop" | "skip" | "failed";
+type BatchItemAction =
+	| "change"
+	| "noop"
+	| "skip"
+	| "failed"
+	| "unknown"
+	| "accepted"
+	| "pending"
+	| "verified"
+	| "mismatch"
+	| "timeout";
 type AttendeeMode = "add" | "remove";
 
 interface BatchDateRange {
@@ -100,10 +122,17 @@ export interface BatchReport {
 	noop: number;
 	skipped: number;
 	failed: number;
+	accepted: number;
+	unknown: number;
+	pending: number;
 	items: BatchReportItem[];
 }
 
 const eventSelectorArgs = {
+	verify: {
+		type: "boolean",
+		description: "Confirm with fresh reads (default timeout: 15s)",
+	},
 	today: { type: "boolean", description: "Today's events" },
 	tomorrow: { type: "boolean", description: "Tomorrow's events" },
 	yesterday: { type: "boolean", description: "Yesterday's events" },
@@ -461,16 +490,104 @@ function changedItems<TPayload>(
 	);
 }
 
-function markMissingResults<TPayload>(
+export function classifyBatchResults<TPayload>(
 	items: Array<PlannedBatchItem<TPayload>>,
-	returnedIds: Set<string>,
-	reason: string,
+	response: ApiResponse<Array<{ id: string }>>,
 ): Array<PlannedBatchItem<TPayload>> {
+	const checked = checkTaskMutationResult(
+		response,
+		changedItems(items).map((item) => item.id),
+	);
 	return items.map((item) => {
 		if (item.action !== "change") return item;
-		if (returnedIds.has(item.id)) return item;
-		return { ...item, action: "failed", reason };
+		if (checked.failedIds.includes(item.id))
+			return { ...item, action: "failed", reason: checked.errors.join("; ") };
+		if (checked.succeededIds.includes(item.id))
+			return {
+				...item,
+				action: "accepted",
+				reason: "submitted, not yet confirmed",
+			};
+		return {
+			...item,
+			action: "unknown",
+			reason:
+				response.message ??
+				"API did not identify an outcome; no success claimed",
+		};
 	});
+}
+
+/** Match modifier responses and envelope failures by modifier operation ID. */
+export function classifyBatchModifierResults(
+	payloads: EventModifierPayload[],
+	response: ApiResponse<EventModifierPayload[]>,
+): { receipts: MutationReceipt[]; errors: string[] } {
+	const returned = new Map(
+		(response.data ?? []).map((record) => [record.id, record]),
+	);
+	const matching = (response.data ?? []).filter((record) =>
+		payloads.some(
+			(payload) =>
+				payload.id === record.id && payload.event_id === record.event_id,
+		),
+	);
+	const failed = [
+		...(response.failed ?? []),
+		...matching
+			.filter(
+				(record) =>
+					record.failed_at != null ||
+					(record as EventModifierPayload & { status?: string }).status ===
+						"failed",
+			)
+			.map((record) => ({
+				id: record.id,
+				error: record.result ?? "Modifier failed",
+			})),
+	];
+	const checked = checkTaskMutationResult(
+		{ ...response, data: matching, failed },
+		payloads.map((payload) => payload.id),
+	);
+	const receipts = payloads.map((payload): MutationReceipt => {
+		const record = returned.get(payload.id);
+		const failure = failed.find((failure) => failure.id === payload.id);
+		const rawStatus = (
+			record as (EventModifierPayload & { status?: string }) | undefined
+		)?.status;
+		const status = checked.failedIds.includes(payload.id)
+			? "failed"
+			: !checked.succeededIds.includes(payload.id)
+				? "unknown"
+				: rawStatus === "pending" && !record?.processed_at
+					? "pending"
+					: rawStatus !== undefined &&
+							![
+								"accepted",
+								"processed",
+								"completed",
+								"pending",
+								"success",
+							].includes(rawStatus)
+						? "unknown"
+						: "accepted";
+		return {
+			operation_id: payload.id,
+			event_id: payload.event_id,
+			kind: "patch",
+			status,
+			failed_at: record?.failed_at ?? null,
+			processed_at: record?.processed_at ?? null,
+			result: record?.result ?? null,
+			...(failure
+				? { error: failure.error }
+				: status === "unknown"
+					? { error: response.message ?? "Modifier outcome not identified" }
+					: {}),
+		};
+	});
+	return { receipts, errors: checked.errors };
 }
 
 function toReportItem<TPayload>(
@@ -500,10 +617,15 @@ export function buildBatchReport<TPayload>(
 		mode,
 		operation,
 		selected: reportItems.length,
-		changed: reportItems.filter((item) => item.action === "change").length,
+		changed: reportItems.filter(
+			(item) => item.action === "change" || item.action === "verified",
+		).length,
 		noop: reportItems.filter((item) => item.action === "noop").length,
 		skipped: reportItems.filter((item) => item.action === "skip").length,
 		failed: reportItems.filter((item) => item.action === "failed").length,
+		accepted: reportItems.filter((item) => item.action === "accepted").length,
+		unknown: reportItems.filter((item) => item.action === "unknown").length,
+		pending: reportItems.filter((item) => item.action === "pending").length,
 		items: reportItems,
 	};
 }
@@ -517,7 +639,14 @@ function printBatchReport(report: BatchReport, json: boolean): void {
 	const label = report.mode === "execute" ? "Batch result" : "Batch plan";
 	console.log(`${label}: ${report.operation}`);
 	console.log(`Selected: ${report.selected}`);
-	console.log(`Changed: ${report.changed}`);
+	console.log(
+		`${report.mode === "execute" ? "Verified changes" : "Changes planned"}: ${report.changed}`,
+	);
+	if (report.mode === "execute") {
+		console.log(`Accepted, not yet confirmed: ${report.accepted}`);
+		console.log(`Unknown: ${report.unknown}`);
+		console.log(`Pending: ${report.pending}`);
+	}
 	console.log(`No-op: ${report.noop}`);
 	console.log(`Skipped: ${report.skipped}`);
 	console.log(`Failed: ${report.failed}`);
@@ -539,16 +668,59 @@ function printBatchReport(report: BatchReport, json: boolean): void {
 	}
 }
 
-function failAfterReport<TPayload>(
+function printBatchMutationReport<TPayload>(
 	operation: string,
 	items: Array<PlannedBatchItem<TPayload>>,
 	json: boolean,
-): never {
+	receipts: unknown[] = items
+		.filter((item) => !["noop", "skip"].includes(item.action))
+		.map((item) => ({ id: item.id, status: item.action })),
+	diagnostics: string[] = [],
+): void {
 	const report = buildBatchReport(operation, "execute", items);
-	printBatchReport(report, json);
-	process.exit(
-		report.changed > 0 ? EXIT_CODES.partialSuccess : EXIT_CODES.upstream,
+	const unsuccessful = items.filter((item) =>
+		["failed", "unknown", "pending", "mismatch", "timeout"].includes(
+			item.action,
+		),
 	);
+	const status =
+		unsuccessful[0]?.action ??
+		(diagnostics.length
+			? "unknown"
+			: items.some((item) => item.action === "accepted")
+				? "accepted"
+				: "verified");
+	// Versioned mutation envelope (Workstreams A + H).
+	if (json)
+		console.log(
+			JSON.stringify(
+				{
+					schema_version: 1,
+					command: `batch ${operation.replaceAll(".", " ")}`,
+					status,
+					receipts,
+					result: report,
+					errors: [
+						...diagnostics,
+						...unsuccessful.map(
+							(item) => `${item.id}: ${item.reason ?? item.action}`,
+						),
+					],
+					warnings:
+						status === "accepted" ? ["Submitted, not yet confirmed"] : [],
+				},
+				null,
+				2,
+			),
+		);
+	else {
+		printBatchReport(report, false);
+		for (const error of diagnostics) console.error(error);
+	}
+	if (unsuccessful.length > 0 || diagnostics.length > 0)
+		process.exit(
+			report.changed > 0 ? EXIT_CODES.partialSuccess : EXIT_CODES.upstream,
+		);
 }
 
 async function runBatchEventAttendees(
@@ -558,6 +730,7 @@ async function runBatchEventAttendees(
 	requireSelector(args, EVENT_SELECTOR_FLAGS, "events");
 	const emails = collectAttendeeEmails(args);
 	const client = createClient();
+	if (args.execute === true) await refreshResource(client, "events");
 	const [events, calendars] = await Promise.all([
 		mutationReader(args.execute !== true)(client, "events"),
 		mutationReader(args.execute !== true)(client, "calendars"),
@@ -597,24 +770,140 @@ async function runBatchEventAttendees(
 	}
 
 	const changes = changedItems(planned);
-	if (changes.length > 0) {
-		const response = await client.createEventModifiers(
-			changes.map((item) => item.payload),
-		);
-		const returnedIds = new Set(
-			(response.data ?? []).map((modifier: EventModifier) => modifier.event_id),
-		);
-		if (!response.success || returnedIds.size !== changes.length) {
-			planned = markMissingResults(
-				planned,
-				response.success ? returnedIds : new Set(),
-				response.message ?? "API did not return a result for this item",
+	let response: ApiResponse<EventModifierPayload[]> = {
+		success: true,
+		message: null,
+		data: [],
+	};
+	if (changes.length) {
+		try {
+			response = await client.createEventModifiers(
+				changes.map((item) => item.payload),
 			);
-			failAfterReport(operation, planned, json);
+		} catch (error) {
+			response = { success: false, data: [], message: String(error) };
 		}
 	}
-
-	printBatchReport(buildBatchReport(operation, "execute", planned), json);
+	const checked = classifyBatchModifierResults(
+		changes.map((item) => item.payload),
+		response,
+	);
+	const verifications = new Map<string, VerificationResult<Event>>();
+	if (args.verify === true) {
+		for (const receipt of checked.receipts) {
+			if (receipt.status !== "accepted") continue;
+			const item = changes.find((item) => item.id === receipt.event_id);
+			const verification = await verifyEventAttendees(
+				client,
+				receipt.event_id,
+				mode === "add" ? (item?.emails ?? []) : [],
+				mode === "remove" ? (item?.emails ?? []) : [],
+				verificationOptions(),
+			);
+			if (isReadOnlyCanonical(verification.observed)) {
+				if (verification.observed)
+					await upsertResourceRecords("events", [verification.observed]);
+				verification.status = "mismatch";
+				verification.differingFields.push("read_only");
+				checked.errors.push(
+					`Event ${receipt.event_id} is read-only; further mutation refused.`,
+				);
+			}
+			verifications.set(receipt.event_id, verification);
+		}
+	}
+	planned = planned.map((item) => {
+		if (item.action !== "change") return item;
+		const receipt = checked.receipts.find(
+			(receipt) => receipt.event_id === item.id,
+		);
+		const verification = verifications.get(item.id);
+		return {
+			...item,
+			action: verification?.status ?? receipt?.status ?? "unknown",
+			reason:
+				verification?.error ??
+				(verification?.status === "mismatch"
+					? `Mismatch on fields: ${verification.differingFields.join(", ")}`
+					: receipt?.error === undefined
+						? receipt?.status === "accepted"
+							? "submitted, not yet confirmed"
+							: undefined
+						: JSON.stringify(receipt.error)),
+		};
+	});
+	const returnedEventIds = new Set(
+		(response.data ?? []).map((d) => d.event_id),
+	);
+	const missing = changes.filter((c) => !returnedEventIds.has(c.id));
+	const isPartial =
+		response.success === true &&
+		missing.length > 0 &&
+		returnedEventIds.size > 0;
+	if (isPartial) {
+		// Partial success: some items returned, some missing.
+		const report = buildBatchReport(operation, "execute", planned);
+		// Override report counts for the partial case.
+		const partialReport = {
+			...report,
+			changed: returnedEventIds.size,
+			failed: missing.length,
+		};
+		const structuredErrors = missing.map((c) => ({
+			id: c.id,
+			message: response.message ?? "API did not return a result for this item",
+		}));
+		if (json) {
+			console.log(
+				JSON.stringify(
+					{
+						schema_version: 1,
+						command: `batch events attendees ${mode}`,
+						status: "partial",
+						receipts: checked.receipts,
+						result: partialReport,
+						errors: structuredErrors,
+						warnings: [],
+					},
+					null,
+					2,
+				),
+			);
+		} else {
+			printBatchReport(partialReport, false);
+			for (const e of structuredErrors) console.error(`${e.id}: ${e.message}`);
+		}
+		process.exitCode = 6;
+		return;
+	}
+	outputMutation({
+		command: `batch events attendees ${mode}`,
+		json,
+		receipts: checked.receipts,
+		verifications,
+		result: buildBatchReport(operation, "execute", planned),
+		errors: checked.errors,
+		...(checked.errors.length &&
+		checked.receipts.every((receipt) => receipt.status === "accepted")
+			? { status: "unknown" as const }
+			: {}),
+	});
+	if (!json)
+		printBatchReport(buildBatchReport(operation, "execute", planned), false);
+	const hasFailures =
+		checked.errors.length > 0 ||
+		checked.receipts.some((r) =>
+			["failed", "unknown", "mismatch", "timeout"].includes(r.status),
+		);
+	if (hasFailures) {
+		const allErrors = [
+			...checked.errors,
+			...checked.receipts
+				.filter((r) => r.error !== undefined)
+				.map((r) => `${r.event_id}: ${r.error}`),
+		];
+		process.exitCode = classifyExit(1, allErrors, []);
+	}
 }
 
 async function runBatchEventDelete(
@@ -627,6 +916,7 @@ async function runBatchEventDelete(
 	}
 
 	const client = createClient();
+	if (args.execute === true) await refreshResource(client, "events");
 	const [events, calendars] = await Promise.all([
 		mutationReader(args.execute !== true)(client, "events"),
 		mutationReader(args.execute !== true)(client, "calendars"),
@@ -654,24 +944,61 @@ async function runBatchEventDelete(
 	}
 
 	const changes = changedItems(planned);
-	if (changes.length > 0) {
-		const response = await client.createEvents(
-			changes.map((item) => item.payload),
-		);
-		const returnedIds = new Set(
-			(response.data ?? []).map((event: Event) => event.id),
-		);
-		if (!response.success || returnedIds.size !== changes.length) {
-			planned = markMissingResults(
-				planned,
-				response.success ? returnedIds : new Set(),
-				response.message ?? "API did not return a result for this item",
-			);
-			failAfterReport(operation, planned, json);
+	const response = await client.createEvents(
+		changes.map((item) => item.payload),
+	);
+	const verifications = new Map<string, VerificationResult<Event>>();
+	if (args.verify === true) {
+		for (const receipt of response.receipts) {
+			if (receipt.status === "accepted")
+				verifications.set(
+					receipt.event_id,
+					await verifyEventDeleted(
+						client,
+						receipt.event_id,
+						verificationOptions(),
+					),
+				);
 		}
 	}
-
-	printBatchReport(buildBatchReport(operation, "execute", planned), json);
+	for (const verification of verifications.values()) {
+		if (isReadOnlyCanonical(verification.observed)) {
+			if (verification.observed)
+				await upsertResourceRecords("events", [verification.observed]);
+			verification.status = "mismatch";
+			verification.differingFields.push("read_only");
+			verification.error =
+				"Observed event is read-only; further mutations refused.";
+		}
+	}
+	planned = planned.map((item) => {
+		if (item.action !== "change") return item;
+		const receipt = response.receipts.find(
+			(receipt) => receipt.event_id === item.id,
+		);
+		const verification = verifications.get(item.id);
+		return {
+			...item,
+			action: verification?.status ?? receipt?.status ?? "unknown",
+			reason: verification
+				? verification.differingFields.join(", ") || verification.error
+				: receipt?.error === undefined
+					? receipt?.status === "accepted"
+						? "submitted, not yet confirmed"
+						: undefined
+					: JSON.stringify(receipt.error),
+		};
+	});
+	const report = buildBatchReport(operation, "execute", planned);
+	const status = outputMutation({
+		command: "batch events delete",
+		json,
+		receipts: response.receipts,
+		verifications,
+		result: report,
+	});
+	if (!json) printBatchReport(report, false);
+	if (status !== "accepted" && status !== "verified") process.exitCode = 1;
 }
 
 async function runBatchSlotDelete(
@@ -706,24 +1033,31 @@ async function runBatchSlotDelete(
 	}
 
 	const changes = changedItems(planned);
+	let response: ApiResponse<Array<{ id: string }>> = {
+		success: true,
+		message: null,
+		data: [],
+	};
 	if (changes.length > 0) {
-		const response = await client.upsertTimeSlots(
-			changes.map((item) => item.payload),
-		);
-		const returnedIds = new Set(
-			(response.data ?? []).map((slot: TimeSlot) => slot.id),
-		);
-		if (!response.success || returnedIds.size !== changes.length) {
-			planned = markMissingResults(
-				planned,
-				response.success ? returnedIds : new Set(),
-				response.message ?? "API did not return a result for this item",
+		try {
+			response = await client.upsertTimeSlots(
+				changes.map((item) => item.payload),
 			);
-			failAfterReport(operation, planned, json);
+		} catch (error) {
+			response = { success: false, data: [], message: String(error) };
 		}
+		planned = classifyBatchResults(planned, response);
 	}
-
-	printBatchReport(buildBatchReport(operation, "execute", planned), json);
+	printBatchMutationReport(
+		operation,
+		planned,
+		json,
+		undefined,
+		checkTaskMutationResult(
+			response,
+			changes.map((item) => item.id),
+		).errors,
+	);
 }
 
 const batchEventAttendeeAddCommand = defineCommand({

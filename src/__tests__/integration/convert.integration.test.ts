@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { eventLifecycle } from "./helpers/event-lifecycle";
 import { FakeAkiflowServer } from "./helpers/fake-server";
 import { loadAllFixtures } from "./helpers/load-fixtures";
 import { spawnCli } from "./helpers/spawn-cli";
@@ -60,9 +61,38 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-	server.seed("tasks", [convertTaskFixture()]);
-	server.seed("events", []);
-
+	server.respondTo("GET", "/v5/tasks", {
+		success: true,
+		message: null,
+		data: [convertTaskFixture()],
+		sync_token: "tasks-token",
+		has_next_page: false,
+	});
+	server.respondTo("GET", "/v5/events", {
+		success: true,
+		message: null,
+		data: [],
+		sync_token: "events-token",
+		has_next_page: false,
+	});
+	server.respondTo("POST", "/v5/event_operations", (req: { body: string }) => {
+		const payload = JSON.parse(req.body);
+		return {
+			success: true,
+			message: null,
+			data: payload,
+		};
+	});
+	server.respondTo("PATCH", "/v5/tasks", (req: { body: string }) => {
+		const payload = JSON.parse(req.body);
+		return {
+			success: true,
+			message: null,
+			data: payload,
+		};
+	});
+	const lifecycle = eventLifecycle(server);
+	lifecycle.records.length = 0;
 	env = makeTestEnv(server.url);
 });
 
@@ -99,9 +129,9 @@ describe("af convert tasks --to events (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(server.snapshot("events")).toHaveLength(1);
-		expect(server.snapshot("tasks")[0]?.deleted_at).toEqual(expect.any(String));
-		const summary = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.status).toBe("accepted");
+		const summary = envelope.result;
 		expect(summary).toEqual(
 			expect.objectContaining({
 				mode: "execute",

@@ -29,7 +29,10 @@ export async function spawnCli(
 	args: string[],
 	opts: SpawnOptions = {},
 ): Promise<SpawnResult> {
-	const proc = spawn(["bun", "run", "src/index.ts", ...args], {
+	const preload = opts.env?.AF_TEST_IPC_DIR
+		? ["--preload", join(import.meta.dir, "ipc-preload.ts")]
+		: [];
+	const proc = spawn(["bun", "run", ...preload, "src/index.ts", ...args], {
 		cwd: opts.cwd ?? REPO_ROOT,
 		env: { ...process.env, ...(opts.env ?? {}) },
 		stdout: "pipe",

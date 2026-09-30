@@ -8,6 +8,8 @@ import type {
 	CreateTimeSlotPayload,
 	UpdateTaskPayload,
 } from "../lib/api/types";
+import { isReadOnlyCanonical } from "../lib/api/types";
+import { upsertResourceRecords } from "../lib/cache";
 import {
 	CalendarResolutionError,
 	getDefaultCalendarId,
@@ -31,8 +33,17 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { addPendingTask } from "../lib/task-cache";
 import { isSyntheticTaskId } from "../lib/task-context";
+import {
+	printTaskMutation,
+	type TaskOutcome,
+	taskMutationOutcome,
+	unknownTaskOutcome,
+} from "../lib/task-mutation-output";
+import { verifyEventFields } from "../lib/verification";
+import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 
 function stringValues(value: unknown): string[] {
 	if (value == null) return [];
@@ -206,6 +217,7 @@ export const createTaskCommand = defineCommand({
 	},
 	args: {
 		...dryRunArgs,
+		verify: verifyFlag,
 		title: {
 			type: "positional",
 			description: "Task title",
@@ -244,7 +256,7 @@ export const createTaskCommand = defineCommand({
 		},
 		json: {
 			type: "boolean",
-			description: "Output created task as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -300,31 +312,30 @@ export const createTaskCommand = defineCommand({
 			printDryRun([previewItem(null, task)], args.json === true);
 			return;
 		}
-		const response = await client.upsertTasks([task]);
-		const createdTask = response.data[0];
-
-		if (!createdTask) {
-			console.error("Error: Failed to create task - no data returned");
-			process.exit(1);
-		}
-
-		await addPendingTask(createdTask);
-
-		if (args.json === true) {
-			console.log(JSON.stringify(createdTask, null, 2));
-			return;
-		}
-
-		console.log("✓ Akiflow task created successfully");
-		console.log(`  ID: ${createdTask.id}`);
-		console.log(`  Title: ${createdTask.title}`);
-		if (createdTask.date) console.log(`  Date: ${createdTask.date}`);
-		if (createdTask.datetime) {
-			const localTime = new Date(createdTask.datetime).toLocaleTimeString([], {
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-			console.log(`  Time: ${localTime}`);
+		try {
+			const response = await client.upsertTasks([task]);
+			const outcome = await taskMutationOutcome(
+				client,
+				response,
+				[task],
+				args.verify === true,
+			);
+			const createdTask =
+				response.data.find((record) => record.id === task.id) ?? null;
+			if (outcome.ok && createdTask) await addPendingTask(createdTask);
+			printTaskMutation(
+				"task create",
+				args.json === true,
+				[outcome],
+				createdTask,
+			);
+		} catch (error) {
+			printTaskMutation(
+				"task create",
+				args.json === true,
+				[unknownTaskOutcome([task.id], error)],
+				null,
+			);
 		}
 	},
 });
@@ -336,6 +347,7 @@ export const createSlotCommand = defineCommand({
 	},
 	args: {
 		...dryRunArgs,
+		verify: verifyFlag,
 		title: {
 			type: "positional",
 			description: "Slot title",
@@ -381,7 +393,7 @@ export const createSlotCommand = defineCommand({
 		},
 		json: {
 			type: "boolean",
-			description: "Output created records as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -442,16 +454,7 @@ export const createSlotCommand = defineCommand({
 			global_updated_at: now,
 		};
 
-		const slotResponse = args["dry-run"]
-			? { data: [slotPayload] }
-			: await client.upsertTimeSlots([slotPayload]);
-		const createdSlot = slotResponse.data[0];
-
-		if (!createdSlot) {
-			console.error("Error: Failed to create task slot - no data returned");
-			process.exit(1);
-		}
-
+		// Validate dependent tasks before creating the slot.
 		const taskDurationInput = args["task-duration"] as string | undefined;
 		const taskDuration =
 			taskDurationInput == null
@@ -467,7 +470,7 @@ export const createSlotCommand = defineCommand({
 				date,
 				datetime: startTime,
 				datetime_tz: timezone,
-				time_slot_id: createdSlot.id,
+				time_slot_id: slotId,
 				status: 2,
 				global_created_at: now,
 				global_updated_at: now,
@@ -482,7 +485,7 @@ export const createSlotCommand = defineCommand({
 				date,
 				datetime: startTime,
 				datetime_tz: timezone,
-				time_slot_id: createdSlot.id,
+				time_slot_id: slotId,
 				status: 2,
 				global_updated_at: now,
 			});
@@ -506,35 +509,60 @@ export const createSlotCommand = defineCommand({
 			);
 			return;
 		}
-		const taskResponse =
-			taskPayloads.length > 0
-				? await client.upsertTasks(taskPayloads)
-				: { data: [] };
-
-		for (const task of taskResponse.data) {
-			await addPendingTask(task);
-		}
-
-		if (args.json === true) {
-			console.log(
-				JSON.stringify(
-					{
-						slot: createdSlot,
-						tasks: taskResponse.data,
-					},
-					null,
-					2,
-				),
+		const outcomes: TaskOutcome[] = [];
+		try {
+			const slotResponse = await client.upsertTimeSlots([slotPayload]);
+			const slotOutcome = await taskMutationOutcome(
+				client,
+				slotResponse,
+				[slotPayload],
+				args.verify === true,
+				"slot",
 			);
-			return;
-		}
-
-		console.log("✓ Akiflow task slot created successfully");
-		console.log(`  ID: ${createdSlot.id}`);
-		console.log(`  Title: ${createdSlot.title}`);
-		console.log(`  Time: ${at} (${durationInput})`);
-		if (taskResponse.data.length > 0) {
-			console.log(`  Linked tasks: ${taskResponse.data.length}`);
+			outcomes.push(slotOutcome);
+			const createdSlot =
+				slotResponse.data.find((record) => record.id === slotId) ?? null;
+			if (!slotOutcome.ok) {
+				printTaskMutation("slot create", args.json === true, outcomes, {
+					slot: createdSlot,
+					tasks: [],
+				});
+				return;
+			}
+			let createdTasks = [] as import("../lib/api/types").Task[];
+			if (taskPayloads.length > 0) {
+				try {
+					const response = await client.upsertTasks(taskPayloads);
+					const taskOutcome = await taskMutationOutcome(
+						client,
+						response,
+						taskPayloads,
+						args.verify === true,
+					);
+					outcomes.push(taskOutcome);
+					createdTasks = response.data.filter((task) =>
+						taskOutcome.receipts.some(
+							(r) =>
+								r.id === task.id && ["accepted", "verified"].includes(r.status),
+						),
+					);
+					for (const task of createdTasks) await addPendingTask(task);
+				} catch (error) {
+					outcomes.push(
+						unknownTaskOutcome(
+							taskPayloads.map((p) => p.id),
+							error,
+						),
+					);
+				}
+			}
+			printTaskMutation("slot create", args.json === true, outcomes, {
+				slot: createdSlot,
+				tasks: createdTasks,
+			});
+		} catch (error) {
+			outcomes.push(unknownTaskOutcome([slotId], error, "slot"));
+			printTaskMutation("slot create", args.json === true, outcomes, null);
 		}
 	},
 });
@@ -584,9 +612,10 @@ export const createEventCommand = defineCommand({
 			type: "string",
 			description: "Event location",
 		},
+		verify: verifyFlag,
 		json: {
 			type: "boolean",
-			description: "Output created event as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -642,23 +671,41 @@ export const createEventCommand = defineCommand({
 			return;
 		}
 		const response = await client.createEvents([eventPayload]);
-		const createdEvent = response.data[0];
-
-		if (!createdEvent) {
-			console.error("Error: Failed to create event - no data returned");
-			process.exit(1);
+		const receipt = response.receipts[0];
+		const verification =
+			receipt?.status === "accepted" && args.verify === true
+				? await verifyEventFields(
+						client,
+						receipt.event_id,
+						eventExpectedFields(eventPayload),
+						verificationOptions(),
+					)
+				: null;
+		if (
+			verification?.observed &&
+			(verification.status === "verified" ||
+				isReadOnlyCanonical(verification.observed))
+		) {
+			await upsertResourceRecords("events", [verification.observed]);
 		}
-
-		if (args.json === true) {
-			console.log(JSON.stringify(createdEvent, null, 2));
-			return;
+		if (verification && isReadOnlyCanonical(verification.observed)) {
+			verification.status = "mismatch";
+			verification.differingFields = [
+				...verification.differingFields,
+				"read_only",
+			];
+			verification.error = `Event "${receipt?.event_id}" is read-only; further mutations are refused`;
 		}
-
-		console.log("✓ Akiflow calendar event created successfully");
-		console.log(`  ID: ${createdEvent.id}`);
-		console.log(`  Title: ${createdEvent.title ?? title}`);
-		console.log(`  Calendar: ${calendar.title} (${calendar.id})`);
-		console.log(`  Time: ${at} (${durationInput})`);
-		if (location) console.log(`  Location: ${location}`);
+		outputMutation({
+			command: "event create",
+			json: args.json === true,
+			receipts: response.receipts,
+			verifications:
+				verification && receipt
+					? new Map([[receipt.event_id, verification]])
+					: undefined,
+			result:
+				verification?.status === "verified" ? verification.observed : null,
+		});
 	},
 });

@@ -13,6 +13,12 @@ import {
 	resolveTaskId,
 	taskTitleFromContext,
 } from "../lib/task-context";
+import {
+	printTaskMutation,
+	taskMutationOutcome,
+	unknownTaskOutcome,
+} from "../lib/task-mutation-output";
+import { verifyFlag } from "../lib/verify-flag";
 
 function collectTaskIds(args: Record<string, unknown>): string[] {
 	const positional = Array.isArray(args._) ? [...args._] : [];
@@ -44,6 +50,7 @@ export const taskCompleteCommand = defineCommand({
 	args: {
 		...dryRunArgs,
 		...snapshotArgs,
+		verify: verifyFlag,
 		id: {
 			type: "positional",
 			description:
@@ -52,7 +59,7 @@ export const taskCompleteCommand = defineCommand({
 		},
 		json: {
 			type: "boolean",
-			description: "Output completed task IDs as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -131,33 +138,49 @@ export const taskCompleteCommand = defineCommand({
 				return;
 			}
 			const response = await client.upsertTasks(updatePayloads);
-
-			if (response.success) {
-				if (args.json === true) {
-					console.log(
-						JSON.stringify(
-							{ result: resolvedTasks, next_cursor: null, errors: [] },
-							null,
-							2,
-						),
-					);
-					return;
-				}
-				console.log(`✓ Completed ${resolvedTasks.length} task(s):`);
-				for (const task of resolvedTasks) {
-					console.log(`  • ${task.title}`);
-				}
-			} else {
-				console.error("Error: Failed to complete tasks");
-				console.error(response.message);
-				process.exit(1);
+			const outcome = await taskMutationOutcome(
+				client,
+				response,
+				updatePayloads,
+				args.verify === true,
+			);
+			if (failedIds.length > 0) {
+				outcome.ok = false;
+				outcome.errors.push(
+					`Could not resolve task IDs: ${failedIds.join(", ")}`,
+				);
+				outcome.receipts.push(
+					...failedIds.map((id) => ({
+						id,
+						resource: "task" as const,
+						status: "failed" as const,
+						error: "Could not resolve task ID",
+					})),
+				);
 			}
+			printTaskMutation(
+				"task complete",
+				args.json === true,
+				[outcome],
+				resolvedTasks.filter((task) =>
+					outcome.receipts.some(
+						(r) =>
+							r.id === task.id && ["accepted", "verified"].includes(r.status),
+					),
+				),
+			);
 		} catch (error) {
-			console.error("Error: Failed to complete tasks");
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
-			process.exit(1);
+			printTaskMutation(
+				"task complete",
+				args.json === true,
+				[
+					unknownTaskOutcome(
+						updatePayloads.map((p) => p.id),
+						error,
+					),
+				],
+				null,
+			);
 		}
 	},
 });

@@ -28,6 +28,13 @@ import {
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { isSyntheticTaskId } from "../lib/task-context";
+import {
+	printTaskMutation,
+	type TaskOutcome,
+	taskMutationOutcome,
+	unknownTaskOutcome,
+} from "../lib/task-mutation-output";
+import { verifyFlag } from "../lib/verify-flag";
 import { createSlotCommand } from "./create";
 
 function fail(message: string, exitCode = 1): never {
@@ -539,6 +546,7 @@ export const updateSlotCommand = defineCommand({
 	},
 	args: {
 		...dryRunArgs,
+		verify: verifyFlag,
 		id: {
 			type: "positional",
 			description: "Slot id or unique id prefix",
@@ -672,54 +680,71 @@ export const updateSlotCommand = defineCommand({
 			);
 			return;
 		}
-		let updatedSlot: TimeSlot = slot;
+		const outcomes: TaskOutcome[] = [];
+		let updatedSlot: TimeSlot | null = slot;
 		if (hasSlotFieldChange) {
-			const slotPayload = buildSlotUpdatePayload({
+			const payload = buildSlotUpdatePayload({
 				slot,
 				title: args.title as string | undefined,
 				calendarId,
 				timing,
 				now,
 			});
-			const slotResponse = await client.upsertTimeSlots([slotPayload]);
-			updatedSlot = slotResponse.data[0] ?? slot;
-			if (!slotResponse.data[0])
-				fail("Failed to update slot - no data returned");
-		}
-
-		const updatedTasks =
-			taskPayloads.length > 0
-				? (await client.upsertTasks(taskPayloads)).data
-				: [];
-
-		if (args.json === true) {
-			console.log(
-				JSON.stringify(
-					{
+			try {
+				const response = await client.upsertTimeSlots([payload]);
+				const outcome = await taskMutationOutcome(
+					client,
+					response,
+					[payload],
+					args.verify === true,
+					"slot",
+				);
+				outcomes.push(outcome);
+				updatedSlot =
+					response.data.find((record) => record.id === slot.id) ?? null;
+				if (!outcome.ok) {
+					printTaskMutation("slot update", args.json === true, outcomes, {
 						slot: updatedSlot,
-						tasks: updatedTasks,
-					},
-					null,
-					2,
-				),
-			);
-			return;
+						tasks: [],
+					});
+					return;
+				}
+			} catch (error) {
+				outcomes.push(unknownTaskOutcome([slot.id], error, "slot"));
+				printTaskMutation("slot update", args.json === true, outcomes, null);
+				return;
+			}
 		}
-
-		console.log("✓ Akiflow task slot updated successfully");
-		console.log(`  ID: ${updatedSlot.id}`);
-		console.log(`  Title: ${updatedSlot.title ?? slot.title}`);
-		if (hasSlotFieldChange) {
-			console.log(
-				`  Time: ${formatSlotDateTime(updatedSlot)} (${formatDurationMinutes(
-					updatedSlot.start_time,
-					updatedSlot.end_time,
-				)}m)`,
-			);
-		}
+		let updatedTasks: Task[] = [];
 		if (taskPayloads.length > 0) {
-			console.log(`  Patched tasks: ${updatedTasks.length}`);
+			try {
+				const response = await client.upsertTasks(taskPayloads);
+				const outcome = await taskMutationOutcome(
+					client,
+					response,
+					taskPayloads,
+					args.verify === true,
+				);
+				outcomes.push(outcome);
+				updatedTasks = response.data.filter((task) =>
+					outcome.receipts.some(
+						(r) =>
+							r.id === task.id && ["accepted", "verified"].includes(r.status),
+					),
+				);
+			} catch (error) {
+				outcomes.push(
+					unknownTaskOutcome(
+						taskPayloads.map((p) => p.id),
+						error,
+					),
+				);
+			}
 		}
+		printTaskMutation("slot update", args.json === true, outcomes, {
+			slot: updatedSlot,
+			tasks: updatedTasks,
+		});
 	},
 });
 
@@ -730,6 +755,7 @@ export const deleteSlotCommand = defineCommand({
 	},
 	args: {
 		...dryRunArgs,
+		verify: verifyFlag,
 		id: {
 			type: "positional",
 			description: "Slot id or unique id prefix",
@@ -749,22 +775,33 @@ export const deleteSlotCommand = defineCommand({
 		);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		const payload = buildSlotDeletePayload({ slot });
-		if (args["dry-run"]) {
+		if (args["dry-run"] === true) {
 			printDryRun([previewItem(slot, payload)], args.json === true);
 			return;
 		}
-		const response = await client.upsertTimeSlots([payload]);
-		const deletedSlot = response.data[0];
-		if (!deletedSlot) fail("Failed to delete slot - no data returned");
-
-		if (args.json === true) {
-			console.log(JSON.stringify(deletedSlot, null, 2));
-			return;
+		try {
+			const response = await client.upsertTimeSlots([payload]);
+			const outcome = await taskMutationOutcome(
+				client,
+				response,
+				[payload],
+				args.verify === true,
+				"slot",
+			);
+			printTaskMutation(
+				"slot delete",
+				args.json === true,
+				[outcome],
+				response.data.find((record) => record.id === slot.id) ?? null,
+			);
+		} catch (error) {
+			printTaskMutation(
+				"slot delete",
+				args.json === true,
+				[unknownTaskOutcome([slot.id], error, "slot")],
+				null,
+			);
 		}
-
-		console.log("✓ Akiflow task slot deleted successfully");
-		console.log(`  ID: ${deletedSlot.id}`);
-		console.log(`  Title: ${deletedSlot.title ?? slot.title}`);
 	},
 });
 

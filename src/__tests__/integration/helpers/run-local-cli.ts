@@ -63,11 +63,17 @@ export function localCliSession(server: FakeAkiflowServer) {
 			const logStart = log.mock.calls.length;
 			const errorStart = error.mock.calls.length;
 			let exitCode = 0;
+			process.exitCode = 0;
 			try {
 				await runCommand(root, { rawArgs: args });
+				if (process.exitCode !== 0 && process.exitCode !== undefined) {
+					exitCode = process.exitCode;
+				}
 			} catch (cause) {
 				exitCode = cause instanceof CliExit ? cause.code : 1;
 				if (!(cause instanceof CliExit)) console.error(String(cause));
+			} finally {
+				process.exitCode = 0;
 			}
 			return {
 				exitCode,

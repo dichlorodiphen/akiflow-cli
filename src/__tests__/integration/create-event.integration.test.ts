@@ -11,7 +11,15 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-
+	server.respondTo("POST", "/v5/event_operations", (req: { body: string }) => {
+		const { body } = req;
+		const payload = JSON.parse(body);
+		return {
+			success: true,
+			message: null,
+			data: payload,
+		};
+	});
 	env = makeTestEnv(server.url);
 });
 
@@ -23,8 +31,8 @@ afterEach(async () => {
 describe("af event create (BDD)", () => {
 	test("creates a timed event through the v5 event operations endpoint", async () => {
 		const testEnv = { ...env.env, TZ: "UTC" };
-		const expectedStart = new Date(2026, 5, 20, 9, 0).toISOString();
-		const expectedEnd = new Date(2026, 5, 20, 9, 30).toISOString();
+		const expectedStart = new Date(Date.UTC(2026, 5, 20, 9, 0)).toISOString();
+		const expectedEnd = new Date(Date.UTC(2026, 5, 20, 9, 30)).toISOString();
 		const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
 			env: testEnv,
 		});
@@ -51,20 +59,11 @@ describe("af event create (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const event = JSON.parse(result.stdout);
-		expect(event.title).toBe("Integration event");
-		expect(event.calendar_id).toBe("cal-personal-1");
-		const canonical = server
-			.snapshot("events")
-			.find((row) => row.id === event.id);
-		expect(canonical).toMatchObject({
-			title: "Integration event",
-			calendar_id: "cal-personal-1",
-			start_time: expectedStart,
-			end_time: expectedEnd,
-			origin_id: expect.any(String),
-			content: { location: "Test office" },
-		});
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.schema_version).toBe(1);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.result).toBeNull();
+		expect(envelope.receipts[0].kind).toBe("create");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",

@@ -6,6 +6,7 @@ import { convertTasksCommand } from "../../commands/convert";
 import type { Calendar, Event, Task } from "../../lib/api/types";
 import * as storage from "../../lib/auth/storage";
 import * as cache from "../../lib/cache";
+import { expectReceiptOnlyCommandFailure } from "../helpers/receipt-only-command";
 
 const mockCredentials = {
 	token: "test-jwt-token",
@@ -229,49 +230,34 @@ describe("convert tasks command", () => {
 		consoleLogSpy.mockRestore();
 	});
 
-	it("creates events and deletes native source tasks only after create succeeds", async () => {
-		fetchSpy
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						success: true,
-						message: null,
-						data: [{ id: "created-event" }],
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						success: true,
-						message: null,
-						data: [{ id: "task-1", deleted_at: "2026-06-19T00:00:00.000Z" }],
-					}),
-					{ status: 200 },
-				),
-			);
-		const consoleLogSpy = spyOn(console, "log");
-
-		await convertTasksCommand.run!({
-			args: {
-				to: "events",
-				execute: true,
-				"delete-source": true,
-				calendar: "Personal",
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
-
-		expect(fetchSpy).toHaveBeenCalledTimes(2);
+	it("keeps native source tasks when event responses cannot identify operations", async () => {
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "created-event" }],
+				}),
+				{ status: 200 },
+			),
+		);
+		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
+		await expectReceiptOnlyCommandFailure(() =>
+			convertTasksCommand.run!({
+				args: {
+					to: "events",
+					execute: true,
+					"delete-source": true,
+					calendar: "Personal",
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
 			"https://api.akiflow.com/v5/event_operations",
 		);
-		expect(fetchSpy.mock.calls[1]?.[0]).toBe(
-			"https://api.akiflow.com/v5/tasks",
-		);
-
 		const eventPayload = JSON.parse(
 			fetchSpy.mock.calls[0]?.[1]?.body as string,
 		);
@@ -289,61 +275,32 @@ describe("convert tasks command", () => {
 				},
 			}),
 		);
-		const deletePayload = JSON.parse(
-			fetchSpy.mock.calls[1]?.[1]?.body as string,
-		);
-		expect(deletePayload[0]).toEqual(
-			expect.objectContaining({
-				id: "task-1",
-				deleted_at: expect.any(String),
-			}),
-		);
 
+		expect(
+			fetchSpy.mock.calls.some((call: unknown[]) =>
+				String(call[0]).endsWith("/v5/tasks"),
+			),
+		).toBe(false);
 		consoleLogSpy.mockRestore();
 	});
 
-	it("accepts event-operation responses without a success flag", async () => {
-		fetchSpy
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						message: null,
-						data: [{ id: "created-event" }],
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						success: true,
-						message: null,
-						data: [{ id: "task-1", deleted_at: "2026-06-19T00:00:00.000Z" }],
-					}),
-					{ status: 200 },
-				),
-			);
-		const consoleLogSpy = spyOn(console, "log");
-
-		await convertTasksCommand.run!({
-			args: {
-				to: "events",
-				execute: true,
-				"delete-source": true,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
-
-		expect(fetchSpy).toHaveBeenCalledTimes(2);
+	it("does not delete sources from event-operation responses without a success flag", async () => {
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({ message: null, data: [{ id: "created-event" }] }),
+				{ status: 200 },
+			),
+		);
+		await expectReceiptOnlyCommandFailure(() =>
+			convertTasksCommand.run!({
+				args: { to: "events", execute: true, "delete-source": true, _: [] },
+				rawArgs: [],
+			} as any),
+		);
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
 			"https://api.akiflow.com/v5/event_operations",
 		);
-		expect(fetchSpy.mock.calls[1]?.[0]).toBe(
-			"https://api.akiflow.com/v5/tasks",
-		);
-
-		consoleLogSpy.mockRestore();
 	});
 
 	it("skips duplicate event creation and can delete matched source tasks", async () => {
@@ -353,6 +310,12 @@ describe("convert tasks command", () => {
 			if (resource === "calendars") return Promise.resolve([calendar()]);
 			return Promise.resolve([]);
 		});
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({ success: true, data: [event()], message: null }),
+				{ status: 200 },
+			),
+		);
 		fetchSpy.mockResolvedValueOnce(
 			new Response(
 				JSON.stringify({
@@ -375,8 +338,9 @@ describe("convert tasks command", () => {
 			rawArgs: [],
 		} as any);
 
-		expect(fetchSpy).toHaveBeenCalledTimes(1);
-		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("/v5/events");
+		expect(fetchSpy.mock.calls[1]?.[0]).toBe(
 			"https://api.akiflow.com/v5/tasks",
 		);
 		expect(consoleLogSpy.mock.calls.join("\n")).toContain(
@@ -384,6 +348,50 @@ describe("convert tasks command", () => {
 		);
 
 		consoleLogSpy.mockRestore();
+	});
+
+	it("retains canonical read-only verification and refuses source deletion", async () => {
+		readResourceSpy.mockImplementation((_client: unknown, resource: string) => {
+			if (resource === "tasks") return Promise.resolve([task()]);
+			if (resource === "events") return Promise.resolve([event()]);
+			if (resource === "calendars") return Promise.resolve([calendar()]);
+			return Promise.resolve([]);
+		});
+		const observed = event({ read_only: true });
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({ success: true, data: [observed], message: null }),
+				{ status: 200 },
+			),
+		);
+		const write = spyOn(cache, "upsertResourceRecords").mockResolvedValue(
+			undefined,
+		);
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await convertTasksCommand.run?.({
+				args: {
+					to: "events",
+					execute: true,
+					"delete-source": true,
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as unknown as Parameters<
+				NonNullable<typeof convertTasksCommand.run>
+			>[0]);
+			const output = JSON.parse(String(log.mock.calls[0]?.[0]));
+			expect(output.status).toBe("mismatch");
+			expect(output.errors.join(" ")).toContain("read-only");
+			expect(process.exitCode).toBe(1);
+			expect(fetchSpy).toHaveBeenCalledTimes(1);
+			expect(write).toHaveBeenCalledWith("events", [observed]);
+		} finally {
+			write.mockRestore();
+			log.mockRestore();
+			process.exitCode = 0;
+		}
 	});
 
 	it("rejects missing task durations without --default-duration", async () => {

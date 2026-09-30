@@ -105,7 +105,7 @@ describe("af slot (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const output = JSON.parse(result.stdout);
+		const output = JSON.parse(result.stdout).result;
 		expect(output.slot).toMatchObject({
 			id: "slot-focus-1",
 			title: "Updated fixture slot",
@@ -164,12 +164,12 @@ describe("af slot (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const deletedSlot = JSON.parse(result.stdout);
-		// The behavioral fake server returns the full canonical row (with
-		// server-assigned origin_id, timestamps, and normalized fields), not
-		// the minimal echo of the old plumbing fake. Assert the deletion
-		// markers, not the whole row shape.
-		expect(deletedSlot).toEqual(
+		const body = JSON.parse(result.stdout);
+		// The receipt envelope carries the full canonical row in `result`
+		// (the behavioral fake server returns server-assigned origin_id,
+		// timestamps, and normalized fields). Assert the deletion markers,
+		// not the whole row shape.
+		expect(body.result).toEqual(
 			expect.objectContaining({
 				id: "slot-focus-1",
 				deleted_at: expect.any(String),

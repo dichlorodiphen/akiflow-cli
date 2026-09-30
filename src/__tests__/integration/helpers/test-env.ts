@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fakeServerIpcDir } from "./fake-server";
 
 export interface TestEnv {
 	cacheDir: string;
@@ -18,6 +19,7 @@ export interface TestEnv {
  * credentials.json — no browser extraction triggered.
  */
 export function makeTestEnv(apiBase: string): TestEnv {
+	const ipcDir = fakeServerIpcDir(apiBase);
 	const cacheDir = mkdtempSync(join(tmpdir(), "af-bdd-cache-"));
 	const configDir = mkdtempSync(join(tmpdir(), "af-bdd-config-"));
 	const afConfigDir = join(configDir, "af");
@@ -51,6 +53,7 @@ export function makeTestEnv(apiBase: string): TestEnv {
 		env: {
 			AF_API_BASE: apiBase,
 			AF_REFRESH_URL: `${apiBase}/oauth/refreshToken`,
+			...(ipcDir ? { AF_TEST_IPC_DIR: ipcDir } : {}),
 			AF_CACHE_DIR: cacheDir,
 			AF_CONFIG_DIR: afConfigDir,
 			AF_NO_AUTO_SYNC: "1",

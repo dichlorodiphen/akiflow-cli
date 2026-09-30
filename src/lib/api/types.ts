@@ -337,6 +337,43 @@ export interface EventOperation extends EventOperationPayload {
 	status: "pending" | "succeeded" | "failed" | null;
 }
 
+/** `accepted` means recorded by the server, not applied by the provider. */
+export type MutationOperationStatus =
+	| "accepted"
+	| "failed"
+	| "pending"
+	| "unknown";
+
+export interface MutationReceipt {
+	operation_id: string;
+	event_id: string;
+	kind: EventOperationKind;
+	status: MutationOperationStatus;
+	failed_at: string | null;
+	processed_at: string | null;
+	result: unknown | null;
+	error?: unknown;
+}
+
+export interface MutationResult {
+	receipts: MutationReceipt[];
+	raw: ApiResponse<EventOperation[]>;
+	allAccepted: boolean;
+}
+
+/**
+ * Phase 2 reconciliation must retain canonical read_only:true records and
+ * block subsequent mutations of them. Desired local state cannot override it.
+ */
+export function isReadOnlyCanonical(record: unknown): boolean {
+	return (
+		typeof record === "object" &&
+		record !== null &&
+		"read_only" in record &&
+		record.read_only === true
+	);
+}
+
 export type EventModifierAction = "attendees/updateList";
 
 export interface EventModifierPayload {

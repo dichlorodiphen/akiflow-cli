@@ -62,6 +62,8 @@ describe("task delete command", () => {
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(await loadPendingTasks()).toHaveLength(0);
-		expect(consoleSpy).toHaveBeenCalledWith(`✓ Deleted task "${taskId}"`);
+		expect(consoleSpy).toHaveBeenCalledWith(
+			`✓ Operation accepted (${taskId}) — submitted, not yet confirmed. Re-run with --verify to confirm.`,
+		);
 	});
 });

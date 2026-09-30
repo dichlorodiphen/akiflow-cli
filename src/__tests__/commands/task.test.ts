@@ -33,6 +33,7 @@ describe("taskPlanCommand", () => {
 	});
 
 	afterEach(() => {
+		process.exitCode = 0;
 		fetchSpy.mockRestore();
 		loadCredentialsSpy.mockRestore();
 		readFileSyncSpy.mockRestore();
@@ -80,7 +81,9 @@ describe("taskPlanCommand", () => {
 			duration: 2700,
 			priority: 2,
 		});
-		expect(consoleLogSpy).toHaveBeenCalledWith("✓ Updated task successfully");
+		expect(consoleLogSpy).toHaveBeenCalledWith(
+			expect.stringContaining("Operation accepted"),
+		);
 
 		consoleLogSpy.mockRestore();
 	});
@@ -88,9 +91,16 @@ describe("taskPlanCommand", () => {
 	it("schedules task with YYYY-MM-DD date format", async () => {
 		// given
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -108,7 +118,7 @@ describe("taskPlanCommand", () => {
 		expect(requestBody[0].datetime).toBeUndefined();
 		expect(requestBody[0].datetime_tz).toBeUndefined();
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			'✓ Scheduled task "task-uuid-1" for 2026-02-10',
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -120,9 +130,16 @@ describe("taskPlanCommand", () => {
 		const expectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -137,7 +154,7 @@ describe("taskPlanCommand", () => {
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			`✓ Scheduled task "task-uuid-1" for ${expectedDate}`,
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -150,9 +167,16 @@ describe("taskPlanCommand", () => {
 		const expectedDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
 
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -167,7 +191,7 @@ describe("taskPlanCommand", () => {
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			`✓ Scheduled task "task-uuid-1" for ${expectedDate}`,
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -176,9 +200,16 @@ describe("taskPlanCommand", () => {
 	it("schedules task with date and time", async () => {
 		// given
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -195,7 +226,7 @@ describe("taskPlanCommand", () => {
 		expect(requestBody[0].datetime).toBeTruthy();
 		expect(requestBody[0].datetime_tz).toBeTruthy();
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			'✓ Scheduled task "task-uuid-1" for 2026-02-10 at 21:00',
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -207,9 +238,16 @@ describe("taskPlanCommand", () => {
 		const expectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -226,7 +264,7 @@ describe("taskPlanCommand", () => {
 		expect(requestBody[0].datetime).toBeTruthy();
 		expect(requestBody[0].datetime_tz).toBeTruthy();
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			`✓ Scheduled task "task-uuid-1" for ${expectedDate} at 14:30`,
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -239,9 +277,16 @@ describe("taskPlanCommand", () => {
 		const expectedDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
 
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -258,7 +303,7 @@ describe("taskPlanCommand", () => {
 		expect(requestBody[0].datetime).toBeTruthy();
 		expect(requestBody[0].datetime_tz).toBeTruthy();
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			`✓ Scheduled task "task-uuid-1" for ${expectedDate} at 09:00`,
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -270,9 +315,16 @@ describe("taskPlanCommand", () => {
 		const expectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
 		fetchSpy.mockResolvedValue(
-			new Response(JSON.stringify({ success: true, message: null, data: [] }), {
-				status: 200,
-			}),
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ id: "task-uuid-1" }],
+				}),
+				{
+					status: 200,
+				},
+			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -289,7 +341,7 @@ describe("taskPlanCommand", () => {
 		expect(requestBody[0].datetime).toBeTruthy();
 		expect(requestBody[0].datetime_tz).toBeTruthy();
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			`✓ Scheduled task "task-uuid-1" for ${expectedDate} at 16:30`,
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();

@@ -64,6 +64,7 @@ describe("task complete command", () => {
 	});
 
 	afterEach(() => {
+		process.exitCode = 0;
 		while (spies.length > 0) {
 			spies.pop()?.mockRestore();
 		}
@@ -105,10 +106,10 @@ describe("task complete command", () => {
 		await doCommand.run?.(mockContext as any);
 
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("✓ Completed 1 task(s):"),
+			expect.stringContaining("Operation accepted"),
 		);
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Buy groceries"),
+			expect.stringContaining("abc123def456"),
 		);
 		expect(fetchSpy).toHaveBeenCalled();
 	});
@@ -148,13 +149,13 @@ describe("task complete command", () => {
 		await doCommand.run?.(mockContext as any);
 
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("✓ Completed 2 task(s):"),
+			expect.stringContaining("Operation accepted"),
 		);
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Buy groceries"),
+			expect.stringContaining("abc123def456"),
 		);
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Write report"),
+			expect.stringContaining("xyz789uvw012"),
 		);
 		expect(fetchSpy).toHaveBeenCalled();
 	});
@@ -188,10 +189,10 @@ describe("task complete command", () => {
 		await doCommand.run?.(mockContext as any);
 
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("✓ Completed 1 task(s):"),
+			expect.stringContaining("Operation accepted"),
 		);
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Buy groceries"),
+			expect.stringContaining("abc123def456"),
 		);
 		expect(fetchSpy).toHaveBeenCalled();
 	});
@@ -312,17 +313,11 @@ describe("task complete command", () => {
 			args: { id: "1" },
 		};
 
-		try {
-			await doCommand.run?.(mockContext as any);
-			throw new Error("Expected ExitError");
-		} catch (error) {
-			if (!(error instanceof ExitError)) {
-				throw error;
-			}
-		}
+		await doCommand.run?.(mockContext as any);
+		expect(process.exitCode).toBe(5);
 
 		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Failed to complete tasks"),
+			expect.stringContaining("Outcome unknown"),
 		);
 		expect(fetchSpy).toHaveBeenCalled();
 	});
@@ -337,17 +332,11 @@ describe("task complete command", () => {
 			args: { id: "1" },
 		};
 
-		try {
-			await doCommand.run?.(mockContext as any);
-			throw new Error("Expected ExitError");
-		} catch (error) {
-			if (!(error instanceof ExitError)) {
-				throw error;
-			}
-		}
+		await doCommand.run?.(mockContext as any);
+		expect(process.exitCode).toBe(5);
 
 		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Failed to complete tasks"),
+			expect.stringContaining("Outcome unknown"),
 		);
 		expect(fetchSpy).toHaveBeenCalled();
 	});
@@ -421,7 +410,7 @@ describe("task complete command", () => {
 		await doCommand.run?.(mockContext as any);
 
 		expect(consoleSpy).toHaveBeenCalledWith(
-			expect.stringContaining("✓ Completed 2 task(s):"),
+			expect.stringContaining("Operation accepted"),
 		);
 		expect(fetchSpy).toHaveBeenCalled();
 	});

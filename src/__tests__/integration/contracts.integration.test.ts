@@ -220,7 +220,16 @@ test("partial batch fixture reports exit 6 in JSON and text with structured erro
 			.map((calendar: unknown) => JSON.stringify(calendar))
 			.join("\n"),
 	);
-	const fixture = `globalThis.fetch = async () => new Response(JSON.stringify({success:true,data:[{event_id:"partial-1"}],message:"fixture partial"}));`;
+	const fixture = `globalThis.fetch = async (input, init) => {
+		const url = String(input);
+		// Sync endpoint needs a sync_token; return empty sync for GETs.
+		if ((init?.method ?? "GET") === "GET" || url.includes("/v5/events")) {
+			if (url.includes("sync_token") || (init?.method ?? "GET") === "GET") {
+				return new Response(JSON.stringify({success:true,data:[],sync_token:"fixture-token",has_next_page:false}));
+			}
+		}
+		return new Response(JSON.stringify({success:true,data:[{event_id:"partial-1"}],message:"fixture partial"}));
+	};`;
 	const command = [
 		"batch",
 		"events",
