@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnCli } from "./helpers/spawn-cli";
 import { makeTestEnv } from "./helpers/test-env";
@@ -42,6 +42,13 @@ function snapshot(dir: string): string {
 	return JSON.stringify(
 		readdirSync(dir)
 			.sort()
+			.filter((name) => {
+				try {
+					return statSync(join(dir, name)).isFile();
+				} catch {
+					return false;
+				}
+			})
 			.map((name) => [name, readFileSync(join(dir, name), "utf8")]),
 	);
 }
