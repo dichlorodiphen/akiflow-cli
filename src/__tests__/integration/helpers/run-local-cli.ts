@@ -1,9 +1,6 @@
 import { spyOn } from "bun:test";
-import { defineCommand, runCommand } from "citty";
-import { batchCommand } from "../../../commands/batch";
-import { eventCommand } from "../../../commands/event";
-import { refreshCommand } from "../../../commands/refresh";
-import { taskCommand } from "../../../commands/task";
+import { runCommand } from "citty";
+import { main } from "../../../command-tree";
 import type { FakeAkiflowServer } from "./fake-server";
 import { makeTestEnv } from "./test-env";
 
@@ -12,14 +9,7 @@ class CliExit extends Error {
 		super(`CLI exit ${code}`);
 	}
 }
-const root = defineCommand({
-	subCommands: {
-		event: eventCommand,
-		task: taskCommand,
-		refresh: refreshCommand,
-		batch: batchCommand,
-	},
-});
+const root = main;
 
 /**
  * Run the actual citty parser and command handlers against dispatch(), without

@@ -87,3 +87,57 @@ describe("readResource", () => {
 		expect(tasks[0]?.id).toBe("tasks-1");
 	});
 });
+
+test("snapshotResources refreshes once and captures per-resource freshness with one generation", async () => {
+	process.env.AF_NO_AUTO_SYNC = "";
+	const calls: string[] = [];
+	const delegate = fakeClient();
+	const client = {
+		get: async <T>(path: string) => {
+			calls.push(path);
+			return delegate.get<T>(path);
+		},
+	};
+	const { snapshotResources } = await import("../../../lib/cache");
+	const snapshot = await snapshotResources(client, [
+		"events",
+		"time_slots",
+		"tasks",
+		"calendars",
+	]);
+	expect(calls).toHaveLength(8);
+	expect(snapshot.generation).toBe(
+		readFileSync(join(dir, "current"), "utf8").trim(),
+	);
+	const tokens = JSON.parse(
+		readFileSync(join(dir, snapshot.generation!, "tokens.json"), "utf8"),
+	);
+	for (const resource of [
+		"events",
+		"time_slots",
+		"tasks",
+		"calendars",
+	] as const) {
+		expect(snapshot.data[resource][0]?.id).toBe(`${resource}-1`);
+		expect(snapshot.observedAt[resource]).toBe(
+			tokens.last_success_at[resource],
+		);
+	}
+	await snapshotResources(client, ["events", "tasks"]);
+	expect(calls).toHaveLength(8);
+});
+
+test("snapshotResources does not mix resource generations during competing publication", async () => {
+	const { snapshotResources, upsertResourceRecords } = await import(
+		"../../../lib/cache"
+	);
+	await rebuild(fakeClient());
+	const first = snapshotResources(fakeClient(), ["events", "tasks"]);
+	await upsertResourceRecords("events", [{ id: "event-new" }]);
+	const snapshot = await first;
+	expect(snapshot.data.events.map((e) => e.id)).toEqual(["events-1"]);
+	expect(snapshot.data.tasks.map((t) => t.id)).toEqual(["tasks-1"]);
+	expect(snapshot.generation).not.toBe(
+		readFileSync(join(dir, "current"), "utf8").trim(),
+	);
+});

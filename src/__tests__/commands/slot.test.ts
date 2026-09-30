@@ -151,11 +151,27 @@ describe("slot command", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
 	let loadCredentialsSpy: ReturnType<typeof spyOn>;
 	let readResourceSpy: ReturnType<typeof spyOn>;
+	let snapshotSpy: ReturnType<typeof spyOn>;
 
 	beforeEach(() => {
 		fetchSpy = spyOn(globalThis, "fetch");
 		loadCredentialsSpy = spyOn(storage, "loadCredentials").mockResolvedValue(
 			mockCredentials,
+		);
+		snapshotSpy = spyOn(cache, "snapshotResources").mockImplementation(
+			async (client, resources) =>
+				({
+					data: Object.fromEntries(
+						await Promise.all(
+							resources.map(async (resource) => [
+								resource,
+								await cache.readResource(client, resource as "tasks"),
+							]),
+						),
+					),
+					generation: "gen-1",
+					observedAt: { time_slots: null },
+				}) as never,
 		);
 		readResourceSpy = spyOn(cache, "readResource").mockImplementation(((
 			_client: unknown,
@@ -173,6 +189,7 @@ describe("slot command", () => {
 		fetchSpy.mockRestore();
 		loadCredentialsSpy.mockRestore();
 		readResourceSpy.mockRestore();
+		snapshotSpy.mockRestore();
 	});
 
 	it("builds a minimal slot delete payload", () => {

@@ -1,5 +1,5 @@
 import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type {
 	Account,
 	ApiResponse,
@@ -180,39 +180,79 @@ export async function readResource<T>(
 	client: CacheClient,
 	resource: Resource,
 ): Promise<T[]> {
-	let generation = pinGeneration();
-	if (!generation)
-		generation = await withLock(cacheLockPath(), ensureGeneration);
-	const tokens = await readTokens(generation);
-	const timestamp = tokens.last_success_at?.[resource];
-	const age = timestamp
-		? Date.now() - Date.parse(timestamp)
-		: Number.POSITIVE_INFINITY;
-	if (
-		(!tokens[resource] || !Number.isFinite(age) || age > 24 * 60 * 60 * 1000) &&
-		!autoSyncDisabled()
-	) {
+	return (await snapshotResources(client, [resource])).data[resource] as T[];
+}
+
+export interface ResourceRecords {
+	tasks: Task[];
+	events: Event[];
+	time_slots: TimeSlot[];
+	labels: Label[];
+	tags: Tag[];
+	calendars: Calendar[];
+	accounts: Account[];
+	contacts: Contact[];
+}
+/** Refresh once, then capture all resource files and tokens without yielding. */
+export async function snapshotResources(
+	client: CacheClient,
+	resources: readonly Resource[],
+): Promise<{
+	data: ResourceRecords;
+	generation: string | null;
+	observedAt: Record<Resource, string | null>;
+}> {
+	let generation =
+		pinGeneration() ?? (await withLock(cacheLockPath(), ensureGeneration));
+	let tokens = JSON.parse(
+		readFileSync(join(generation, "tokens.json"), "utf8"),
+	) as Tokens;
+	const stale = resources.some((resource) => {
+		const timestamp = tokens.last_success_at?.[resource];
+		const age = timestamp ? Date.now() - Date.parse(timestamp) : Infinity;
+		return (
+			!tokens[resource] || !Number.isFinite(age) || age > 24 * 60 * 60 * 1000
+		);
+	});
+	if (stale && !autoSyncDisabled()) {
 		await sharedRefresh(client);
 		const published = pinGeneration();
 		if (!published)
 			throw new Error("Cache refresh did not publish a generation");
 		generation = published;
 	}
-	// Pin once, then capture the whole file synchronously. No await can mix tokens
-	// or resource files from a subsequent publication. Retry if GC removed an old pin.
+	const capture = (directory: string) => {
+		tokens = JSON.parse(
+			readFileSync(join(directory, "tokens.json"), "utf8"),
+		) as Tokens;
+		const data = Object.fromEntries(
+			RESOURCES.map((resource) => [
+				resource,
+				resources.includes(resource)
+					? parseRecords(
+							readFileSync(join(directory, `${resource}.jsonl`), "utf8"),
+						)
+					: [],
+			]),
+		) as unknown as ResourceRecords;
+		const observedAt = Object.fromEntries(
+			RESOURCES.map((resource) => [
+				resource,
+				tokens.last_success_at?.[resource] ?? null,
+			]),
+		) as Record<Resource, string | null>;
+		return { data, generation: basename(directory), observedAt };
+	};
 	try {
-		return parseRecords<T>(
-			readFileSync(join(generation, `${resource}.jsonl`), "utf8"),
-		);
+		return capture(generation);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		const current = pinGeneration();
 		if (!current || current === generation) throw error;
-		return parseRecords<T>(
-			readFileSync(join(current, `${resource}.jsonl`), "utf8"),
-		);
+		return capture(current);
 	}
 }
+
 function parseRecords<T>(text: string): T[] {
 	return text
 		.split("\n")

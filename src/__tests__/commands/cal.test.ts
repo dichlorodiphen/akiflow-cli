@@ -13,7 +13,7 @@ describe("cal command", () => {
 			createClient().constructor.prototype,
 			"getTimeSlots",
 		);
-		mockReadResource = spyOn(cache, "readResource");
+		mockReadResource = spyOn(cache, "snapshotResources");
 	});
 
 	afterEach(() => {
@@ -89,16 +89,16 @@ describe("cal command", () => {
 		tasks?: Task[];
 		calendars?: Calendar[];
 	} = {}): void {
-		mockReadResource.mockImplementation(
-			(_client: unknown, resource: string) => {
-				if (resource === "events") return Promise.resolve(events);
-				if (resource === "time_slots") return Promise.resolve(slots);
-				if (resource === "tasks") return Promise.resolve(tasks);
-				if (resource === "calendars") return Promise.resolve(calendars);
-				if (resource === "accounts") return Promise.resolve([]);
-				return Promise.resolve([]);
+		mockReadResource.mockResolvedValue({
+			data: { events, time_slots: slots, tasks, calendars, accounts: [] },
+			generation: "gen-1",
+			observedAt: {
+				events: null,
+				time_slots: null,
+				tasks: null,
+				calendars: null,
 			},
-		);
+		});
 	}
 
 	it("lists today's events in timeline format", async () => {
@@ -129,11 +129,7 @@ describe("cal command", () => {
 
 	it("lists free time slots when --free flag is used", async () => {
 		// given
-		mockGetTimeSlots.mockResolvedValue({
-			success: true,
-			message: null,
-			data: mockTimeSlots,
-		});
+		mockMergedCalendarData();
 
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -144,11 +140,11 @@ describe("cal command", () => {
 		} as never);
 
 		// then
-		expect(mockGetTimeSlots).toHaveBeenCalled();
+		expect(mockReadResource).toHaveBeenCalled();
 		expect(consoleLogSpy).toHaveBeenCalled();
 		const output = consoleLogSpy.mock.calls.join("\n");
-		expect(output).toContain("Free Time Slots Today");
-		expect(output).toContain("available");
+		expect(output).toContain(" — ");
+		expect(output).toContain(" min)");
 
 		consoleLogSpy.mockRestore();
 	});
@@ -211,6 +207,7 @@ describe("cal command", () => {
 			tasks: [
 				{
 					id: "task-1",
+					calendar_id: "cal1",
 					title: "Portland trip: task block",
 					description: null,
 					datetime: new Date(2026, 5, 22, 15, 0).toISOString(),
@@ -374,11 +371,7 @@ describe("cal command", () => {
 			},
 		];
 
-		mockGetTimeSlots.mockResolvedValue({
-			success: true,
-			message: null,
-			data: fullDaySlots,
-		});
+		mockMergedCalendarData({ slots: fullDaySlots });
 
 		const consoleLogSpy = spyOn(console, "log");
 
@@ -389,9 +382,9 @@ describe("cal command", () => {
 		} as never);
 
 		// then
-		expect(mockGetTimeSlots).toHaveBeenCalled();
+		expect(mockReadResource).toHaveBeenCalled();
 		const output = consoleLogSpy.mock.calls.join("\n");
-		expect(output).toContain("Free Time Slots Today");
+		expect(output).toContain(" — ");
 
 		consoleLogSpy.mockRestore();
 	});
@@ -418,9 +411,9 @@ describe("cal command", () => {
 		// then
 		expect(mockReadResource).toHaveBeenCalled();
 		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			"Error: Authentication failed. Please run 'af auth' to login.",
+			"Error: Authentication failed",
 		);
-		expect(processExitSpy).toHaveBeenCalledWith(1);
+		expect(processExitSpy).toHaveBeenCalledWith(3);
 
 		consoleErrorSpy.mockRestore();
 		processExitSpy.mockRestore();
@@ -447,11 +440,8 @@ describe("cal command", () => {
 
 		// then
 		expect(mockReadResource).toHaveBeenCalled();
-		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			"Error: Failed to fetch calendar",
-			"Connection failed",
-		);
-		expect(processExitSpy).toHaveBeenCalledWith(1);
+		expect(consoleErrorSpy).toHaveBeenCalledWith("Error: Connection failed");
+		expect(processExitSpy).toHaveBeenCalledWith(5);
 
 		consoleErrorSpy.mockRestore();
 		processExitSpy.mockRestore();

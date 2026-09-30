@@ -168,3 +168,69 @@ Mutation `--json` returns a versioned receipt envelope:
 ```
 
 The envelope status is `accepted`, `verified`, `failed`, `unknown`, `pending`, `mismatch`, or `timeout`. Event receipts retain server operation IDs and diagnostics; task/slot receipts identify each requested record and its outcome. `result` contains observed/returned records or the command report, or null; it must not be interpreted as confirmation without `status: "verified"`. Preview output retains its existing report shape because it submits no mutation.
+
+## Occurrence calendar and audit reads
+
+`af cal` queries events, slots, and scheduled tasks from one pinned cache generation.
+It attaches per-resource fetch timestamps and keeps linked constituents visible;
+linked events own time, followed by slots, then tasks. Deleted, hidden, cancelled,
+declined, done, and trashed records are excluded by default. Uncovered recurring
+series masters retain their existing visibility rule. An explicit calendar can
+select a hidden calendar, but deleted calendars remain excluded. Without an
+explicit calendar, the active visible calendar set applies. Account and connector
+filters apply to every source. `--no-events`, `--no-slots`, and `--no-tasks` skip
+the corresponding source. Search covers normalized title and original description.
+
+```bash
+af cal --date 2026-06-20 --summary --json
+af cal --date 2026-06-20 --free --min-duration 30m --json
+af slot list --account <account-id> --connector google --calendar <calendar> --json
+af audit --date 2026-06-20 --json
+af audit --from 2026-06-20 --to 2026-06-23 --calendar <calendar> --min-duration 1h
+```
+
+Summary JSON has `result: {counts: {event, slot, task}, total, busy_minutes}`.
+Counts include constituents; busy minutes union overlapping active intervals,
+apply explicit link time ownership, and clip to the requested window. Human
+summaries start with `Calendar summary`. The summary and raw source name is now
+`slot` (formerly `time_slot`); cleaned calendar JSON retains its established
+`time_slot` type and existing field names. Raw JSON contains `{type, record,
+start, end}` entries under `{result, next_cursor: null, errors: []}`.
+
+`--free` uses the capacity library across all selected sources and the requested
+window (today by default), rather than a separate slot-only request. JSON returns
+`result: [{start, end}]`; text lists `HH:MM — HH:MM (N min)`, or
+`(no free windows in range)`. `--min-duration` accepts the existing duration syntax
+and defaults to zero. Intervals are half open; local day selectors include the
+entire day, including DST changes.
+
+`slot list` and batch slot selectors also accept `--account`, `--connector`, and
+`--calendar`. Batch event/slot selection uses the same occurrence identity and
+overlap rules. Batch mutation previews retain their no-auth/no-sync/no-write
+contract, so their cache readers are not replaced with auto-refreshing reads.
+
+`af audit` is read-only and can trigger the usual cache auto-refresh. Selectors:
+`--today`, `--tomorrow`, `--date`, `--from`, `--to`, `--account`, `--connector`,
+`--calendar`, `--min-duration`, and `--json`. Human sections are FETCH, COVERAGE,
+DISCREPANCIES, and EFFECTIVE. JSON is `{schema_version: 1, audit, envelope}`;
+`--envelope` can wrap this in the CLI's universal output contract.
+
+Audit fetch metadata includes per-resource `observed_at` and the pinned generation.
+Coverage includes effective source counts and each resource's age/staleness.
+Discrepancies list possible provider echo groups, suggested canonical members,
+explicit event owner overrides, nonoverlapping linked times, and status counts
+seen versus excluded within the range and identity scope before visibility filtering.
+Suggestions prefer a non-null provider `origin_id`, then earliest start (ID breaks
+exact ties). This is the “Google wins for matched provider events” review rule,
+not provider verification. Echoes never suppress time or hide records; native
+Akiflow tasks without a provider origin ID never join echo groups. Owner overrides
+remain informational: the linked event owns time even when the linked times diverge.
+
+The review envelope stays at schema version 1 and includes ISO `generated_at`,
+local IANA `timezone`, `provenance: {generation, observed_at}`, the window,
+occurrences, unioned busy minutes, free windows, and warnings. Envelope
+`observed_at` is the oldest fetch timestamp across events/slots/tasks/calendars,
+or null if any is unknown. Occurrences have provider identity plus `observedAt`,
+`generation`, and `pending: false`. Pending is reserved for workstream D's overlay.
+The legacy `pending-tasks.json` helper used by task list is not part of these
+snapshot calendar/audit reads.
