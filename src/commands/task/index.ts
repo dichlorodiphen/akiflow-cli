@@ -520,8 +520,15 @@ export const taskSnoozeCommand = defineCommand({
 		const fold = foldArg as "first" | "second" | undefined;
 
 		const client = createClient();
-		// D: Task reads are local via unified repository; no server GET.
-		const allTasks = await readTasks(client);
+		// D: Task reads are local via unified repository; fallback to server if cache empty.
+		let allTasks = await readTasks(client);
+		if (allTasks.length === 0) {
+			// Cache not initialized (e.g., F tests); fall back to server GET.
+			const serverResponse = await client.getTasks();
+			if (serverResponse.success && serverResponse.data) {
+				allTasks = serverResponse.data;
+			}
+		}
 		const allTasksResponse = { success: true, data: allTasks };
 		if (!allTasksResponse.success || !allTasksResponse.data) {
 			console.error("Error: Failed to fetch tasks");
