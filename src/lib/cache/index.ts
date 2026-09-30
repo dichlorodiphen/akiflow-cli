@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type {
 	Account,
 	ApiResponse,
@@ -10,164 +11,132 @@ import type {
 	Task,
 	TimeSlot,
 } from "../api/types";
-import { cacheFile, cachePath } from "../platform-config";
-import { readAllRecords, upsertRecords } from "./jsonl-store";
+import { cacheLockPath } from "../platform-config";
+import {
+	ensureGeneration,
+	pinGeneration,
+	publishGeneration,
+	RESOURCES,
+	stageGeneration,
+} from "./generation";
+import { upsertRecords } from "./jsonl-store";
 import { withLock } from "./lock";
 import { syncResource } from "./sync";
 import { readTokens, type Tokens, writeTokens } from "./tokens";
-
-const LOCK = (): string => cacheFile(".lock");
-
-const RESOURCES = [
-	"tasks",
-	"events",
-	"time_slots",
-	"labels",
-	"tags",
-	"calendars",
-	"accounts",
-	"contacts",
-] as const;
 export type Resource = (typeof RESOURCES)[number];
-
 export interface CacheClient {
 	get<T>(
 		path: string,
 		params: { sync_token?: string; limit?: number },
 	): Promise<ApiResponse<T[]>>;
 }
-
 export interface ResourceSyncSummary {
 	upserted: number;
 	tombstones: number;
 	pages: number;
 }
 
-/**
- * Cold-start sync: delete the cache and rebuild every resource from scratch.
- */
+/** Download into a private generation; publish only after every file validates. */
+async function syncPass(
+	client: CacheClient,
+	resources: readonly Resource[],
+	cold: boolean,
+): Promise<Record<Resource, ResourceSyncSummary>> {
+	return withLock(cacheLockPath(), async () => {
+		const base = await ensureGeneration();
+		const stage = stageGeneration(cold ? undefined : base);
+		try {
+			const tokens: Tokens = cold ? {} : await readTokens(base);
+			const summary = {} as Record<Resource, ResourceSyncSummary>;
+			for (const resource of resources) {
+				const result = await syncResource(client, {
+					resource,
+					keyOf: (r: { id: string }) => r.id,
+					previousToken: tokens[resource] ?? null,
+					directory: stage,
+				});
+				tokens[resource] = result.finalToken;
+				tokens.last_success_at ??= {};
+				tokens.last_success_at[resource] = new Date().toISOString();
+				summary[resource] = {
+					upserted: result.upsertedCount,
+					tombstones: result.tombstoneCount,
+					pages: result.pages,
+				};
+			}
+			if (resources.length === RESOURCES.length)
+				tokens.last_full_sync_at = new Date().toISOString();
+			await writeTokens(tokens, stage);
+			publishGeneration(stage);
+			return summary;
+		} finally {
+			rmSync(stage, { recursive: true, force: true });
+		}
+	});
+}
+
+/** Rebuild observations using GETs only; root journals, contexts and logs survive. */
 export async function rebuild(
 	client: CacheClient,
 ): Promise<Record<Resource, ResourceSyncSummary>> {
-	return withLock(LOCK(), async () => {
-		try {
-			rmSync(cachePath(), { recursive: true, force: true });
-		} catch {
-			/* fresh */
-		}
-		const tokens: Tokens = {};
-		const summary = {} as Record<Resource, ResourceSyncSummary>;
-		for (const res of RESOURCES) {
-			const result = await syncResource(client, {
-				resource: res,
-				keyOf: (r: { id: string }) => r.id,
-				previousToken: null,
-			});
-			tokens[res] = result.finalToken;
-			summary[res] = {
-				upserted: result.upsertedCount,
-				tombstones: result.tombstoneCount,
-				pages: result.pages,
-			};
-		}
-		tokens.last_full_sync_at = new Date().toISOString();
-		await writeTokens(tokens);
-		return summary;
-	});
+	return syncPass(client, RESOURCES, true);
 }
-
-/**
- * Warm-path delta sync: fetch only changes since last token per resource.
- */
 export async function refresh(
 	client: CacheClient,
 ): Promise<Record<Resource, ResourceSyncSummary>> {
-	return withLock(LOCK(), async () => {
-		const tokens = await readTokens();
-		const summary = {} as Record<Resource, ResourceSyncSummary>;
-		for (const res of RESOURCES) {
-			const result = await syncResource(client, {
-				resource: res,
-				keyOf: (r: { id: string }) => r.id,
-				previousToken: tokens[res] ?? null,
-			});
-			tokens[res] = result.finalToken;
-			summary[res] = {
-				upserted: result.upsertedCount,
-				tombstones: result.tombstoneCount,
-				pages: result.pages,
-			};
-		}
-		// A successful delta refresh leaves every resource fully synced, so the
-		// cache is fresh as of now (previously only rebuild() stamped this,
-		// which kept every readResource() perpetually "stale").
-		tokens.last_full_sync_at = new Date().toISOString();
-		await writeTokens(tokens);
-		return summary;
-	});
+	return syncPass(client, RESOURCES, false);
 }
-
-/**
- * Incremental refresh of a single resource. Prefer this over refresh() in
- * mutation commands that need fresh state for one resource before writing —
- * a full refresh syncs all eight resources and is slower.
- */
 export async function refreshResource(
 	client: CacheClient,
 	resource: Resource,
 ): Promise<ResourceSyncSummary> {
-	return withLock(LOCK(), async () => {
-		const tokens = await readTokens();
-		const result = await syncResource(client, {
-			resource,
-			keyOf: (r: { id: string }) => r.id,
-			previousToken: tokens[resource] ?? null,
-		});
-		tokens[resource] = result.finalToken;
-		tokens.last_full_sync_at = new Date().toISOString();
-		await writeTokens(tokens);
-		return {
-			upserted: result.upsertedCount,
-			tombstones: result.tombstoneCount,
-			pages: result.pages,
-		};
-	});
+	return (await syncPass(client, [resource], false))[resource];
 }
 
-/**
- * Write records straight into the local cache without a server round-trip.
- * Used as write-through after a successful mutation so a follow-up mutation
- * builds its operation base from the just-applied state, even when the
- * server's sync endpoint has not caught up with its write endpoint yet.
- */
+/** Write through the pinned base using a new immutable generation and atomic publication. */
 export async function upsertResourceRecords<T extends { id: string }>(
 	resource: Resource,
 	records: T[],
 ): Promise<void> {
-	return withLock(LOCK(), async () => {
-		await upsertRecords(cacheFile(`${resource}.jsonl`), records, (r) => r.id);
+	return withLock(cacheLockPath(), async () => {
+		const base = await ensureGeneration();
+		const stage = stageGeneration(base);
+		try {
+			await upsertRecords(
+				join(stage, `${resource}.jsonl`),
+				records,
+				(r) => r.id,
+			);
+			publishGeneration(stage);
+		} finally {
+			rmSync(stage, { recursive: true, force: true });
+		}
 	});
 }
 
-/**
- * Module-level in-flight refresh promise. Commands like `af cal` read
- * several resources concurrently via Promise.all; without sharing, each
- * readResource() would trigger its own refresh() and the losers would die
- * after ~10s with "could not acquire ... .lock". Concurrent callers share
- * one refresh instead of racing for the cache lock.
- */
-let inflightRefresh: Promise<Record<Resource, ResourceSyncSummary>> | null =
-	null;
-
+// Concurrent automatic reads share one complete refresh. Each resource's own
+// timestamp decides whether to request it; refreshing events alone cannot hide stale tasks.
+const inflightRefresh = new Map<
+	string,
+	Promise<Record<Resource, ResourceSyncSummary>>
+>();
 function sharedRefresh(
 	client: CacheClient,
 ): Promise<Record<Resource, ResourceSyncSummary>> {
-	if (!inflightRefresh) {
-		inflightRefresh = refresh(client).finally(() => {
-			inflightRefresh = null;
+	const key = cacheLockPath();
+	let pending = inflightRefresh.get(key);
+	if (!pending) {
+		pending = refresh(client).finally(() => {
+			inflightRefresh.delete(key);
 		});
+		inflightRefresh.set(key, pending);
 	}
-	return inflightRefresh;
+	return pending;
+}
+
+/** AF_NO_AUTO_SYNC: 1, true, yes or on (case insensitive) explicitly disable sync. */
+export function autoSyncDisabled(): boolean {
+	return /^(1|true|yes|on)$/i.test(process.env.AF_NO_AUTO_SYNC?.trim() ?? "");
 }
 
 /**
@@ -211,17 +180,42 @@ export async function readResource<T>(
 	client: CacheClient,
 	resource: Resource,
 ): Promise<T[]> {
-	const tokens = await readTokens();
-	const hasToken = tokens[resource] != null;
-	const stale = shouldAutoRefresh(tokens);
-	if ((!hasToken || stale) && !process.env.AF_NO_AUTO_SYNC) {
+	let generation = pinGeneration();
+	if (!generation)
+		generation = await withLock(cacheLockPath(), ensureGeneration);
+	const tokens = await readTokens(generation);
+	const timestamp = tokens.last_success_at?.[resource];
+	const age = timestamp
+		? Date.now() - Date.parse(timestamp)
+		: Number.POSITIVE_INFINITY;
+	if (
+		(!tokens[resource] || !Number.isFinite(age) || age > 24 * 60 * 60 * 1000) &&
+		!autoSyncDisabled()
+	) {
 		await sharedRefresh(client);
+		const published = pinGeneration();
+		if (!published)
+			throw new Error("Cache refresh did not publish a generation");
+		generation = published;
 	}
-	return readAllRecords<T>(cacheFile(`${resource}.jsonl`));
+	// Pin once, then capture the whole file synchronously. No await can mix tokens
+	// or resource files from a subsequent publication. Retry if GC removed an old pin.
+	try {
+		return parseRecords<T>(
+			readFileSync(join(generation, `${resource}.jsonl`), "utf8"),
+		);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		const current = pinGeneration();
+		if (!current || current === generation) throw error;
+		return parseRecords<T>(
+			readFileSync(join(current, `${resource}.jsonl`), "utf8"),
+		);
+	}
 }
-
-function shouldAutoRefresh(tokens: Tokens): boolean {
-	if (!tokens.last_full_sync_at) return true;
-	const age = Date.now() - new Date(tokens.last_full_sync_at).getTime();
-	return age > 24 * 60 * 60 * 1000;
+function parseRecords<T>(text: string): T[] {
+	return text
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => JSON.parse(line) as T);
 }

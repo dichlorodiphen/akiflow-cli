@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { ApiResponse } from "../api/types";
 import { cacheFile } from "../platform-config";
 import { readAllRecords, rewriteRecords } from "./jsonl-store";
@@ -21,6 +22,8 @@ export interface SyncOptions<T extends { id: string }> {
 	limit?: number;
 	/** Override the API path. Default: `/v5/<resource>`. */
 	apiPath?: string;
+	/** Private staging directory supplied by the generation transaction. */
+	directory?: string;
 }
 
 export interface SyncResult {
@@ -36,13 +39,15 @@ export interface SyncResult {
  * - Paginates with sync_token until has_next_page = false.
  * - Tombstones (deleted_at != null OR status=9) remove matching local records.
  * - Upserts replace matching records (by key) or append if new.
- * - Single file rewrite at the end — no torn state.
+ * - Atomic file rewrite at the end; the caller publishes resources + tokens together.
  */
 export async function syncResource<
 	T extends { id: string; deleted_at?: string | null; status?: number | null },
 >(client: ResourceClient, opts: SyncOptions<T>): Promise<SyncResult> {
 	const path = opts.apiPath ?? `/v5/${opts.resource}`;
-	const file = cacheFile(`${opts.resource}.jsonl`);
+	const file = opts.directory
+		? join(opts.directory, `${opts.resource}.jsonl`)
+		: cacheFile(`${opts.resource}.jsonl`);
 	const limit = opts.limit ?? 2500;
 
 	let token: string | undefined = opts.previousToken ?? undefined;
@@ -86,7 +91,7 @@ export async function syncResource<
 	}
 
 	// Merge into local cache: drop tombstoned IDs + IDs being replaced by
-	// upserts, then append upserts. Single rewrite for atomicity.
+	// upserts, then append upserts. The caller owns generation publication.
 	const existing = await readAllRecords<T>(file);
 	const upsertIds = new Set(allUpserts.map(opts.keyOf));
 	const kept = existing.filter(
