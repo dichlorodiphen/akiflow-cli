@@ -310,6 +310,14 @@ export const taskPlanCommand = defineCommand({
 			updatePayload.datetime_tz = getLocalTimezone();
 		}
 
+		if (
+			!atArg &&
+			(await readTasks(client)).find((t) => t.id === taskId)?.datetime
+		) {
+			updatePayload.datetime = null;
+			updatePayload.datetime_tz = null;
+		}
+
 		if (context.args["dry-run"]) {
 			printDryRun(
 				[previewItem(await cachedTask(taskId), updatePayload)],
@@ -366,7 +374,7 @@ export const taskSnoozeCommand = defineCommand({
 		const client = createClient();
 		const allTasksResponse = context.args["dry-run"]
 			? { success: true, data: [await cachedTask(taskId)] }
-			: await client.getTasks();
+			: { success: true, data: await readTasks(client) };
 		if (!allTasksResponse.success || !allTasksResponse.data) {
 			console.error("Error: Failed to fetch tasks");
 			process.exit(1);

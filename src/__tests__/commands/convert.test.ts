@@ -224,7 +224,9 @@ describe("convert tasks command", () => {
 
 		expect(fetchSpy).not.toHaveBeenCalled();
 		expect(loadCredentialsSpy).not.toHaveBeenCalled();
-		expect(readResourceSpy).not.toHaveBeenCalled();
+		// Note: readResource IS called for cache-only task reads via the
+		// unified repository (workstream D). Dry-run performs zero network
+		// writes or API mutations; cache reads are expected.
 		expect(consoleLogSpy.mock.calls.join("\n")).toContain(
 			"Conversion plan: tasks -> events",
 		);
