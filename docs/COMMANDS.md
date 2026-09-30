@@ -53,25 +53,43 @@ Shell completion for bash/zsh/fish is generated at invocation from the same citt
 
 ```bash
 af task list [--today|--date <date>|--from <date> --to <date>] [--json|--raw]
-af task create <title> [--today|--date <date>] [--at HH:MM] [--duration <duration>]
+af task create <title> [--today|--date <date>] [--at HH:MM] [--duration <duration>] [--timezone <IANA>] [--fold first|second]
 af task complete <task-id-or-short-id> [more ids...]
 af task update <task-id> [--title <text>] [--description <text>|--description-file <path>] [--duration <duration>] [--project <project-id>] [--priority 1|2|3]
-af task plan <task-id> [--date <date>] [--at HH:MM]
-af task snooze <task-id> --duration <duration>
+af task plan <task-id> [--date <date>] [--at HH:MM] [--clear-time] [--timezone <IANA>] [--fold first|second]
+af task snooze <task-id> --duration <duration> [--timezone <IANA>] [--fold first|second]
 af task delete <task-id>
 ```
 
 Numeric short IDs come from the latest task list snapshot; use `--snapshot <token>` to pin them. Full UUIDs work without list context.
 
+### Scheduling and timezones
+
+All schedule writes accept `--timezone <IANA>` (e.g., `America/Los_Angeles`), which determines how `--date`/`--at` inputs are interpreted. Precedence: explicit `--timezone` flag > profile setting (`~/.config/af/config.json`) > system local timezone. UTC hosts and LA hosts produce identical instants for identical inputs.
+
+**Snooze semantics (behavioral break):** `af task snooze` now moves the actual `datetime` for timed tasks (previously it only changed the `date` field, leaving the time wrong). The basis depends on the unit:
+- `--duration 1h` (or `30m`): **elapsed basis** — adds exact milliseconds to the UTC instant.
+- `--duration 1d` (or `2w`): **wall-day basis** — preserves wall-clock time in the task's timezone. Across DST spring-forward, `1d` means 23 elapsed hours but the same wall-clock time (e.g., 9:00 AM stays 9:00 AM).
+
+The task's `datetime_tz` is preserved. During migration, `task plan --date --at` remains the verified operational path for precise scheduling.
+
+**Date-only planning:** `af task plan <id> --date 2026-10-05` (without `--at`) on a timed task preserves the existing wall-clock time by default (moves 9:00 AM to 9:00 AM on the new date). Use `--clear-time` to explicitly convert to date-only (all-day).
+
+**DST policy:** Times that don't exist (e.g., 2:30 AM on spring-forward day) are rejected with a clear error — never silently shifted. Ambiguous times (e.g., 1:30 AM on fall-back day, occurs twice) require `--fold first|second` — never guessed.
+
+**Invalid dates:** `2026-02-30`, `2026-13-01`, etc. are rejected with clear errors (not rolled over).
+
 ## Events
 
 ```bash
-af event create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--description <text>|--description-file <path>] [--location <text>] [--rrule <rule>] [--send-updates none|all] [--json]
-af event update <event-id> [--date <date>] [--at HH:MM] [--duration <duration>] [--title <text>] [--description <text>|--description-file <path>] [--location <text>] [--scope series|instance] [--instance-anchor <ISO>] [--send-updates none|all] [--json]
+af event create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--description <text>|--description-file <path>] [--location <text>] [--rrule <rule>] [--timezone <IANA>] [--fold first|second] [--send-updates none|all] [--json]
+af event update <event-id> [--date <date>] [--at HH:MM] [--duration <duration>] [--title <text>] [--description <text>|--description-file <path>] [--location <text>] [--scope series|instance] [--instance-anchor <ISO>] [--timezone <IANA>] [--fold first|second] [--send-updates none|all] [--json]
 af event delete <event-id> [--scope series] [--truncate-before <date>] [--send-updates none|all] [--json]
 af event attendees add <event-id> <email> [more emails...] [--send-updates none|all] [--json]
 af event attendees remove <event-id> <email> [more emails...] [--send-updates none|all] [--json]
 ```
+
+**Event update zone preservation:** `af event update <id> --date ...` preserves the event's existing timezone unless `--timezone` is explicitly given. The update interprets the new date/time in the event's zone, not the host's local zone.
 
 Event v1 supports timed, writable Google events. `--rrule` creates recurring series (validated, serialized as `recurrence:['RRULE:...']`; `--dry-run` previews the first 5 occurrences in the event timezone). Recurring events require explicit `--scope`: `series` edits/deletes the master, `instance` edits a single occurrence via the Google fallback adapter (anchored by `original_start_time`, never current `start_time`; Akiflow sync reported as pending). Series delete truncates (via `--truncate-before` setting RRULE UNTIL) or deletes the master — never loops instances. All-day, reminders, and conferencing are unsupported. Event mutations default to `--send-updates none` (silent guest handling); use `--send-updates all` to notify guests.
 
@@ -91,7 +109,7 @@ Batch commands require at least one selector and dry-run by default. Event selec
 ```bash
 af slot list [--date <date>|--from <date> --until <date>] [--search <text>] [--json]
 af slot show <slot-id> [--json]
-af slot create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--task <title>] [--task-id <task-id>] [--task-duration <duration>] [--json]
+af slot create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--task <title>] [--task-id <task-id>] [--task-duration <duration>] [--timezone <IANA>] [--fold first|second] [--json]
 af slot update <slot-id> [--title <text>] [--date <date>] [--at HH:MM] [--duration <duration>] [--calendar <calendar>] [--add-task-id <task-id>] [--remove-task-id <task-id>] [--json]
 af slot delete <slot-id> [--json]
 ```
@@ -105,7 +123,7 @@ af calendar list [--json] [--all]
 af calendar default [--json]
 af calendar resolve <calendar> [--json]
 
-af cal [--today|--date <date>|--from <date> --to <date>] [--search <text>] [--summary] [--json|--raw]
+af cal [--today|--date <date>|--from <date> --to <date>] [--search <text>] [--summary] [--timezone <IANA>] [--json|--raw]
 af cal --calendar <calendar>
 af cal --free
 af cal --no-events

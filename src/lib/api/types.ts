@@ -145,8 +145,8 @@ export interface UpdateTaskPayload {
 	title?: string;
 	description?: string;
 	date?: string;
-	datetime?: string;
-	datetime_tz?: string;
+	datetime?: string | null;
+	datetime_tz?: string | null;
 	duration?: number;
 	priority?: number;
 	dailyGoal?: number;

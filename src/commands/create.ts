@@ -38,8 +38,8 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
-import { previewOccurrences, validateRRule } from "../lib/recurrence";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import { previewOccurrences, validateRRule } from "../lib/recurrence";
 import { addPendingTask } from "../lib/task-cache";
 import { isSyntheticTaskId } from "../lib/task-context";
 import {
@@ -48,6 +48,16 @@ import {
 	taskMutationOutcome,
 	unknownTaskOutcome,
 } from "../lib/task-mutation-output";
+import {
+	DSTFoldError,
+	DSTGapError,
+	InvalidCalendarDateError,
+	InvalidTimezoneError,
+	parseCalendarDate,
+	validateTimezone,
+	zonedTimeToUtc,
+} from "../lib/timezone";
+import { resolveEffectiveTimezone } from "../lib/timezone-profile";
 import { verifyEventFields } from "../lib/verification";
 import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 
@@ -74,17 +84,92 @@ function resolveDate(args: Record<string, unknown>): string | undefined {
 	return parsed;
 }
 
-function resolveTime(date: string, timeInput: string): string {
+function resolveTime(
+	date: string,
+	timeInput: string,
+	timezone: string,
+	fold?: "first" | "second",
+): string {
 	const parsedTime = parseTime(timeInput);
 	if (!parsedTime) {
 		console.error(
 			`Error: Invalid time format "${timeInput}". Expected format: HH:MM (e.g., 21:00, 14:30)`,
 		);
-		process.exit(1);
+		process.exit(2);
 	}
 
-	return createDateTimeUTC(date, parsedTime.hours, parsedTime.minutes);
+	try {
+		return zonedTimeToUtc(
+			date,
+			parsedTime.hours,
+			parsedTime.minutes,
+			timezone,
+			fold,
+		);
+	} catch (error) {
+		console.error(
+			`Error: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		process.exit(2);
+	}
 }
+
+/**
+ * Resolve the effective timezone for a create command.
+ * Precedence: explicit --timezone flag > profile > system local.
+ * Validates the date string as a real calendar date.
+ */
+async function resolveCreateTimezone(
+	args: Record<string, unknown>,
+	date: string | undefined,
+): Promise<string> {
+	// Validate the date is a real calendar date (rejects 2026-02-30).
+	if (date) {
+		try {
+			parseCalendarDate(date);
+		} catch (error) {
+			console.error(
+				`Error: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			process.exit(2);
+		}
+	}
+
+	const explicit = args.timezone as string | undefined;
+	try {
+		return await resolveEffectiveTimezone(explicit);
+	} catch (error) {
+		console.error(
+			`Error: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		process.exit(2);
+	}
+}
+
+function resolveFold(
+	args: Record<string, unknown>,
+): "first" | "second" | undefined {
+	const foldArg = args.fold as string | undefined;
+	if (foldArg !== undefined && foldArg !== "first" && foldArg !== "second") {
+		console.error(
+			`Error: Invalid --fold "${foldArg}". Expected "first" or "second".`,
+		);
+		process.exit(2);
+	}
+	return foldArg as "first" | "second" | undefined;
+}
+
+const timezoneArg = {
+	type: "string",
+	description:
+		"IANA timezone for interpreting --date/--at (e.g., America/Los_Angeles). Defaults to profile, then local.",
+} as const;
+
+const foldArg = {
+	type: "string",
+	description:
+		'Disambiguate DST fold: "first" (before transition) or "second" (after). Required if the time is ambiguous.',
+} as const;
 
 export interface BuildEventPayloadInput {
 	title: string;
@@ -261,6 +346,8 @@ export const createTaskCommand = defineCommand({
 			type: "string",
 			description: "Local start time (e.g., '21:00', '14:30')",
 		},
+		timezone: timezoneArg,
+		fold: foldArg,
 		duration: {
 			type: "string",
 			description: "Duration (e.g., '30m', '1h', '2h')",
@@ -280,6 +367,8 @@ export const createTaskCommand = defineCommand({
 		const durationInput = args.duration as string | undefined;
 		const projectName = args.project as string | undefined;
 		const now = new Date().toISOString();
+		const timezone = await resolveCreateTimezone(args, date);
+		const fold = resolveFold(args);
 
 		let datetime: string | undefined;
 		let datetimeTz: string | undefined;
@@ -287,8 +376,8 @@ export const createTaskCommand = defineCommand({
 
 		if (at) {
 			const taskDate = date ?? getTodayDate();
-			datetime = resolveTime(taskDate, at);
-			datetimeTz = getLocalTimezone();
+			datetime = resolveTime(taskDate, at, timezone, fold);
+			datetimeTz = timezone;
 			calendarId = args["dry-run"]
 				? (await dryRunCalendar()).id
 				: await getDefaultCalendarId(client);
@@ -375,6 +464,8 @@ export const createSlotCommand = defineCommand({
 			description: "Local start time (e.g., '09:30')",
 			required: true,
 		},
+		timezone: timezoneArg,
+		fold: foldArg,
 		duration: {
 			type: "string",
 			description: "Slot duration (e.g., '30m', '1h')",
@@ -422,7 +513,8 @@ export const createSlotCommand = defineCommand({
 		const at = args.at as string;
 		const durationInput = args.duration as string;
 		const description = args.description as string | undefined;
-		const timezone = getLocalTimezone();
+		const timezone = await resolveCreateTimezone(args, date);
+		const fold = resolveFold(args);
 
 		if (!date) {
 			console.error("Error: Slot requires --date");
@@ -430,7 +522,7 @@ export const createSlotCommand = defineCommand({
 		}
 
 		const durationSeconds = parseDurationToSeconds(durationInput);
-		const startTime = resolveTime(date, at);
+		const startTime = resolveTime(date, at, timezone, fold);
 		const endTime = new Date(
 			new Date(startTime).getTime() + durationSeconds * 1000,
 		).toISOString();
@@ -601,6 +693,8 @@ export const createEventCommand = defineCommand({
 			description: "Local start time (e.g., '09:30')",
 			required: true,
 		},
+		timezone: timezoneArg,
+		fold: foldArg,
 		duration: {
 			type: "string",
 			description: "Event duration (e.g., '30m', '1h')",
@@ -658,7 +752,8 @@ export const createEventCommand = defineCommand({
 			args["description-file"] as string | undefined,
 		);
 		const location = (args.location as string | undefined)?.trim();
-		const timezone = getLocalTimezone();
+		const timezone = await resolveCreateTimezone(args, date);
+		const fold = resolveFold(args);
 
 		if (!date) {
 			console.error("Error: Event requires --date");
@@ -680,7 +775,7 @@ export const createEventCommand = defineCommand({
 		}
 
 		const durationSeconds = parseDurationToSeconds(durationInput);
-		const startTime = resolveTime(date, at);
+		const startTime = resolveTime(date, at, timezone, fold);
 		const endTime = new Date(
 			new Date(startTime).getTime() + durationSeconds * 1000,
 		).toISOString();

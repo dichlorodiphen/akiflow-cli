@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { FakeAkiflowServer } from "./helpers/fake-server";
 import { eventLifecycle } from "./helpers/event-lifecycle";
+import { FakeAkiflowServer } from "./helpers/fake-server";
 import { loadAllFixtures } from "./helpers/load-fixtures";
 import { spawnCli } from "./helpers/spawn-cli";
 import { makeTestEnv } from "./helpers/test-env";
@@ -44,8 +44,10 @@ describe("af event (BDD)", () => {
 		});
 		expect(refresh.exitCode).toBe(0);
 
-		const expectedStart = new Date(Date.UTC(2026, 4, 21, 10, 30)).toISOString();
-		const expectedEnd = new Date(Date.UTC(2026, 4, 21, 11, 15)).toISOString();
+		// The event is in America/New_York. Workstream F: --at is interpreted
+		// in the event's zone (not the host TZ). 10:30 EDT (UTC-4) = 14:30 UTC.
+		const expectedStart = "2026-05-21T14:30:00.000Z";
+		const expectedEnd = "2026-05-21T15:15:00.000Z";
 		const result = await spawnCli(
 			[
 				"event",

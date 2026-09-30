@@ -146,7 +146,7 @@ describe("incident matrix against behavioral server (BDD)", () => {
 		expect(overlap).toBe(false);
 	});
 	// Workstream F: move datetime and preserve datetime_tz for elapsed-time snoozes.
-	test.skip("F I8: snooze must move the timed instant and preserve its timezone", async () => {
+	test("F I8: snooze must move the timed instant and preserve its timezone", async () => {
 		server.scenarios.snooze(taskId);
 		const result = await cli.run([
 			"task",
@@ -164,7 +164,7 @@ describe("incident matrix against behavioral server (BDD)", () => {
 		expect(server.snapshot("tasks")[0]?.datetime).toBe(patch.datetime);
 	});
 	// Workstream F: move the timed instant to the requested day while preserving wall time.
-	test.skip("F I8: date-only planning must preserve the scheduled wall time on the new day", async () => {
+	test("F I8: date-only planning must preserve the scheduled wall time on the new day", async () => {
 		server.scenarios.snooze(taskId);
 		const result = await cli.run([
 			"task",

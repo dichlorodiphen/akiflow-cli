@@ -50,6 +50,8 @@ af task plan <task-id> --date 2026-06-19 --at 14:30
 af task snooze <task-id> --duration 1d
 ```
 
+**Timezone handling:** All schedule writes accept `--timezone <IANA>` (e.g., `America/Los_Angeles`). Precedence: explicit flag > profile (`~/.config/af/config.json`) > system local. `af task snooze` moves the actual `datetime` for timed tasks: `1h`/`30m` use elapsed basis, `1d`/`1w` preserve wall-clock time (across DST, `1d` keeps 9:00 AM at 9:00 AM). `af task plan --date` (without `--at`) preserves wall-clock time by default; use `--clear-time` for date-only. DST gaps are rejected; folds require `--fold first|second`. Invalid dates like `2026-02-30` are rejected.
+
 Use `af slot create` for true Akiflow task slots:
 
 ```bash

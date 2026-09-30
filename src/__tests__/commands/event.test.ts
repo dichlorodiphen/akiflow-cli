@@ -177,8 +177,10 @@ describe("event command", () => {
 
 	it("updates a cached event through /v5/event_operations", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
-		const expectedStart = new Date(2026, 5, 20, 10, 0).toISOString();
-		const expectedEnd = new Date(2026, 5, 20, 10, 45).toISOString();
+		// The event is in America/Los_Angeles. 10:00 LA time (PDT, UTC-7) = 17:00 UTC.
+		// Workstream F: event update preserves the event's zone (not host local).
+		const expectedStart = "2026-06-20T17:00:00.000Z";
+		const expectedEnd = "2026-06-20T17:45:00.000Z";
 		fetchSpy.mockResolvedValueOnce(
 			new Response(
 				JSON.stringify({

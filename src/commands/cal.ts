@@ -30,6 +30,19 @@ export function formatMergedTimeline(entries: Occurrence[]): string {
 export async function runMergedCalendar(
 	args: Record<string, unknown>,
 ): Promise<void> {
+	// Validate --timezone if provided (affects date selector interpretation).
+	const timezoneArg = args.timezone as string | undefined;
+	if (timezoneArg) {
+		const { validateTimezone } = await import("../lib/timezone");
+		try {
+			validateTimezone(timezoneArg);
+		} catch (error) {
+			console.error(
+				`Error: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			process.exit(2);
+		}
+	}
 	const { snapshot, pairs, window, minMinutes } = await readOccurrences(
 		createClient(),
 		args,
@@ -128,6 +141,11 @@ export const cal = defineCommand({
 		free: {
 			type: "boolean",
 			description: "Find free windows in the selected range",
+		},
+		timezone: {
+			type: "string",
+			description:
+				"IANA timezone for interpreting date selectors (e.g., America/Los_Angeles). Defaults to profile, then local.",
 		},
 		// Date range
 		today: { type: "boolean", description: "Today only (default)" },

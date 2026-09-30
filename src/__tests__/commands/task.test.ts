@@ -41,8 +41,9 @@ describe("taskPlanCommand", () => {
 
 	it("updates basic task fields", async () => {
 		// given
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -56,6 +57,7 @@ describe("taskPlanCommand", () => {
 					],
 				}),
 				{ status: 200 },
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -73,7 +75,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0]).toMatchObject({
 			id: "task-uuid-1",
@@ -90,8 +92,9 @@ describe("taskPlanCommand", () => {
 
 	it("schedules task with YYYY-MM-DD date format", async () => {
 		// given
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -100,6 +103,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -112,7 +116,7 @@ describe("taskPlanCommand", () => {
 
 		// then
 		expect(fetchSpy).toHaveBeenCalled();
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe("2026-02-10");
 		expect(requestBody[0].datetime).toBeUndefined();
@@ -129,8 +133,9 @@ describe("taskPlanCommand", () => {
 		const today = new Date();
 		const expectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -139,6 +144,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -150,7 +156,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -166,8 +172,9 @@ describe("taskPlanCommand", () => {
 		tomorrow.setDate(tomorrow.getDate() + 1);
 		const expectedDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
 
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -176,6 +183,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -187,7 +195,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -199,8 +207,9 @@ describe("taskPlanCommand", () => {
 
 	it("schedules task with date and time", async () => {
 		// given
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -209,6 +218,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -220,7 +230,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe("2026-02-10");
 		expect(requestBody[0].datetime).toBeTruthy();
@@ -237,8 +247,9 @@ describe("taskPlanCommand", () => {
 		const today = new Date();
 		const expectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -247,6 +258,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -258,7 +270,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(requestBody[0].datetime).toBeTruthy();
@@ -276,8 +288,9 @@ describe("taskPlanCommand", () => {
 		tomorrow.setDate(tomorrow.getDate() + 1);
 		const expectedDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
 
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -286,6 +299,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -297,7 +311,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(requestBody[0].datetime).toBeTruthy();
@@ -314,8 +328,9 @@ describe("taskPlanCommand", () => {
 		const today = new Date();
 		const expectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-		fetchSpy.mockResolvedValue(
-			new Response(
+		fetchSpy.mockImplementation(() =>
+			Promise.resolve(
+				new Response(
 				JSON.stringify({
 					success: true,
 					message: null,
@@ -324,6 +339,7 @@ describe("taskPlanCommand", () => {
 				{
 					status: 200,
 				},
+				),
 			),
 		);
 		const consoleLogSpy = spyOn(console, "log");
@@ -335,7 +351,7 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls[0];
+		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(requestBody[0].datetime).toBeTruthy();

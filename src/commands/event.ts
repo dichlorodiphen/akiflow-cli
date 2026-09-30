@@ -32,6 +32,13 @@ import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { editRecurrenceInstance, getCapabilities } from "../lib/providers/router";
 import { truncateSeriesUntil } from "../lib/recurrence";
 import {
+	formatInTimezone,
+	parseCalendarDate,
+	validateTimezone,
+	zonedTimeToUtc,
+} from "../lib/timezone";
+import { resolveEffectiveTimezone } from "../lib/timezone-profile";
+import {
 	type VerificationResult,
 	verifyEventDeleted,
 	verifyEventFields,
@@ -66,13 +73,29 @@ export function resolveSendUpdatesFlag(
 function resolveDateInput(dateInput: string | undefined): string {
 	if (!dateInput) fail("Event update requires --date");
 
+	// Validate as a real calendar date first (rejects 2026-02-30).
+	const isoMatch = dateInput.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+	if (isoMatch) {
+		try {
+			parseCalendarDate(isoMatch[0]);
+			return isoMatch[0];
+		} catch (error) {
+			fail(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	const parsed = parseDate(dateInput);
 	if (!parsed) fail(`Could not parse date "${dateInput}"`);
 
 	return parsed;
 }
 
-function resolveTimeInput(date: string, timeInput: string | undefined): string {
+function resolveTimeInput(
+	date: string,
+	timeInput: string | undefined,
+	timezone: string,
+	fold?: "first" | "second",
+): string {
 	if (!timeInput) fail("Event update requires --at");
 
 	const parsedTime = parseTime(timeInput);
@@ -82,7 +105,17 @@ function resolveTimeInput(date: string, timeInput: string | undefined): string {
 		);
 	}
 
-	return createDateTimeUTC(date, parsedTime.hours, parsedTime.minutes);
+	try {
+		return zonedTimeToUtc(
+			date,
+			parsedTime.hours,
+			parsedTime.minutes,
+			timezone,
+			fold,
+		);
+	} catch (error) {
+		fail(error instanceof Error ? error.message : String(error));
+	}
 }
 
 async function resolveDescription(
@@ -388,6 +421,16 @@ export const eventUpdateCommand = defineCommand({
 			type: "string",
 			description: "Local start time (e.g., '09:30')",
 		},
+		timezone: {
+			type: "string",
+			description:
+				"IANA timezone for interpreting --date/--at. Defaults to the event's existing timezone, then profile, then local.",
+		},
+		fold: {
+			type: "string",
+			description:
+				'Disambiguate DST fold: "first" (before transition) or "second" (after). Required if the time is ambiguous.',
+		},
 		duration: {
 			type: "string",
 			description: "Event duration (e.g., '30m', '1h')",
@@ -526,17 +569,52 @@ export const eventUpdateCommand = defineCommand({
 			process.exit(2);
 		}
 
-		const observedStart = new Date(event.start_time as string);
-		const observedDate = `${observedStart.getFullYear()}-${String(observedStart.getMonth() + 1).padStart(2, "0")}-${String(observedStart.getDate()).padStart(2, "0")}`;
+		// Resolve the effective timezone for this update.
+		// Precedence: explicit --timezone > event's existing zone > profile > local.
+		// This preserves the event's zone unless the user explicitly overrides it.
+		const foldArg = args.fold as string | undefined;
+		if (foldArg !== undefined && foldArg !== "first" && foldArg !== "second") {
+			console.error(
+				`Error: Invalid --fold "${foldArg}". Expected "first" or "second".`,
+			);
+			process.exit(2);
+		}
+		const fold = foldArg as "first" | "second" | undefined;
+
+		let updateTimezone: string;
+		try {
+			const explicitTz = args.timezone as string | undefined;
+			if (explicitTz) {
+				updateTimezone = validateTimezone(explicitTz);
+			} else if (event.start_datetime_tz) {
+				updateTimezone = event.start_datetime_tz;
+			} else {
+				updateTimezone = await resolveEffectiveTimezone();
+			}
+		} catch (error) {
+			console.error(
+				`Error: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			process.exit(2);
+		}
+
+		// Extract the observed date/time in the event's timezone (not host local).
+		const observedWall = formatInTimezone(
+			event.start_time as string,
+			updateTimezone,
+		);
+		const observedDate = `${observedWall.year}-${String(observedWall.month).padStart(2, "0")}-${String(observedWall.day).padStart(2, "0")}`;
 		const date = args.date
 			? resolveDateInput(args.date as string)
 			: observedDate;
-		const observedTime = `${String(observedStart.getHours()).padStart(2, "0")}:${String(observedStart.getMinutes()).padStart(2, "0")}`;
+		const observedTime = `${String(observedWall.hours).padStart(2, "0")}:${String(observedWall.minutes).padStart(2, "0")}`;
 		const startTime =
 			args.date || args.at
 				? resolveTimeInput(
 						date,
 						(args.at as string | undefined) ?? observedTime,
+						updateTimezone,
+						fold,
 					)
 				: (event.start_time as string);
 		let durationSeconds =
@@ -565,10 +643,7 @@ export const eventUpdateCommand = defineCommand({
 			location: args.location as string | undefined,
 			startTime,
 			endTime,
-			timezone:
-				args.date || args.at
-					? getLocalTimezone()
-					: (event.start_datetime_tz ?? getLocalTimezone()),
+			timezone: updateTimezone,
 			sendUpdates,
 		});
 
