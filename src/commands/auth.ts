@@ -2,6 +2,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { defineCommand } from "citty";
 import { scanBrowsers } from "../lib/auth/extract-token";
+import { refreshAccessToken } from "../lib/auth/refresh";
 import {
 	clearCredentials,
 	loadCredentials,
@@ -16,7 +17,7 @@ async function showStatus(): Promise<void> {
 
 	if (!credentials) {
 		console.log("Not authenticated");
-		console.log("Run 'af auth' to login");
+		console.log("Run 'af auth login' to authenticate");
 		return;
 	}
 
@@ -38,7 +39,7 @@ async function showStatus(): Promise<void> {
 			"\nToken has expired. It will be automatically refreshed on next API call.",
 		);
 	} else if (isExpired) {
-		console.log("\nToken has expired. Run 'af auth' to re-authenticate.");
+		console.log("\nToken has expired. Run 'af auth login' to authenticate.");
 	}
 }
 
@@ -54,7 +55,7 @@ async function interactiveAuth(): Promise<void> {
 		console.log("\nNo Akiflow tokens found in any browser");
 		console.log("\nTo authenticate:");
 		console.log("1. Log in to https://web.akiflow.com in your browser");
-		console.log("2. Run 'af auth' again to extract your session token");
+		console.log("2. Run 'af auth login' again to extract your session token");
 
 		// Avoid hard-exiting (helps tests and embedding).
 		return;
@@ -124,9 +125,26 @@ async function refreshAuth(): Promise<void> {
 	console.log("Refreshing authentication...");
 
 	const credentials = await loadCredentials();
-	if (credentials) {
-		console.log("Clearing existing credentials...");
-		await clearCredentials();
+	if (credentials?.refreshToken) {
+		const replacement = await refreshAccessToken({
+			refreshToken: credentials.refreshToken,
+			clientId: "10",
+		});
+		if (!replacement) {
+			console.error(
+				"Token refresh failed: endpoint rejected the request, returned invalid tokens, or could not be reached. Existing credentials retained.",
+			);
+			process.exitCode = 1;
+			return;
+		}
+		await saveCredentials(
+			replacement.accessToken,
+			credentials.clientId,
+			replacement.expiresAtMs,
+			replacement.refreshToken,
+		);
+		console.log("Authentication refreshed successfully");
+		return;
 	}
 
 	await interactiveAuth();
@@ -182,6 +200,14 @@ export const authRefreshCommand = defineCommand({
 /**
  * Main auth command
  */
+export const authLoginCommand = defineCommand({
+	meta: {
+		name: "login",
+		description: "Authenticate by scanning browser sessions",
+	},
+	run: interactiveAuth,
+});
+
 export const authCommand = defineCommand({
 	meta: {
 		name: "auth",
@@ -189,10 +215,12 @@ export const authCommand = defineCommand({
 	},
 	subCommands: {
 		status: authStatusCommand,
+		login: authLoginCommand,
 		logout: authLogoutCommand,
 		refresh: authRefreshCommand,
 	},
-	run: async () => {
-		await interactiveAuth();
+	run: async ({ rawArgs }) => {
+		if (rawArgs.some((arg) => !arg.startsWith("-"))) return;
+		console.log("Usage: af auth <status|login|logout|refresh>");
 	},
 });

@@ -57,7 +57,7 @@ af --help
 After installation, extract credentials from your browser:
 
 ```bash
-af auth
+af auth login
 ```
 
 Requires Akiflow to be logged in via browser (Chrome, Firefox, Safari, Arc, Brave, Edge supported).

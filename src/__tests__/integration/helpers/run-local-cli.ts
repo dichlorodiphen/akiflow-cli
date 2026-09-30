@@ -1,6 +1,8 @@
 import { spyOn } from "bun:test";
 import { defineCommand, runCommand } from "citty";
+import { authCommand } from "../../../commands/auth";
 import { batchCommand } from "../../../commands/batch";
+import { doctorCommand } from "../../../commands/doctor";
 import { eventCommand } from "../../../commands/event";
 import { refreshCommand } from "../../../commands/refresh";
 import { taskCommand } from "../../../commands/task";
@@ -14,6 +16,8 @@ class CliExit extends Error {
 }
 const root = defineCommand({
 	subCommands: {
+		auth: authCommand,
+		doctor: doctorCommand,
 		event: eventCommand,
 		task: taskCommand,
 		refresh: refreshCommand,
@@ -55,13 +59,24 @@ export function localCliSession(server: FakeAkiflowServer) {
 			)
 		)
 			throw new Error(`Forbidden test URL: ${url}`);
-		return server.dispatch(request);
+		const pending = server.dispatch(request);
+		if (!request.signal) return pending;
+		request.signal.throwIfAborted();
+		return new Promise<Response>((resolve, reject) => {
+			const abort = () => reject(request.signal.reason);
+			request.signal.addEventListener("abort", abort, { once: true });
+			pending
+				.then(resolve, reject)
+				.finally(() => request.signal.removeEventListener("abort", abort));
+		});
 	}) as typeof globalThis.fetch);
 	return {
 		env,
 		async run(args: string[]) {
 			const logStart = log.mock.calls.length;
 			const errorStart = error.mock.calls.length;
+			const previousExitCode = process.exitCode;
+			process.exitCode = 0;
 			let exitCode = 0;
 			process.exitCode = 0;
 			try {
@@ -75,6 +90,8 @@ export function localCliSession(server: FakeAkiflowServer) {
 			} finally {
 				process.exitCode = 0;
 			}
+			exitCode ||= Number(process.exitCode ?? 0);
+			process.exitCode = previousExitCode;
 			return {
 				exitCode,
 				stdout: log.mock.calls

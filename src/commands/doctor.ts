@@ -14,6 +14,12 @@ interface BrowserReport {
 }
 
 interface DoctorReport {
+	checks?: Array<{
+		check: string;
+		severity: "ok" | "warning" | "critical";
+		message: string;
+		recovery: string;
+	}>;
 	credentials: {
 		has_creds: boolean;
 		user_id: number | null;
@@ -47,15 +53,83 @@ const RESOURCES = [
 
 export async function runDoctor(opts: {
 	json?: boolean;
+	strict?: boolean;
 }): Promise<DoctorReport> {
+	const credentials = await checkCredentials();
 	const report: DoctorReport = {
-		credentials: await checkCredentials(),
+		credentials,
 		browsers: checkBrowsers(),
 		cache: await checkCache(),
-		api: await checkApi(),
+		api:
+			opts.strict && !credentials.has_creds
+				? {
+						user_settings_status: null,
+						elapsed_ms: null,
+						error: "not checked — no credentials",
+					}
+				: await checkApi(),
 	};
-	if (!opts.json) printReport(report);
-	else console.log(JSON.stringify(report, null, 2));
+	if (opts.strict) {
+		const expired =
+			report.credentials.expires_at != null &&
+			Date.parse(report.credentials.expires_at) <= Date.now();
+		report.checks = [
+			{
+				check: "credentials",
+				severity:
+					!report.credentials.has_creds ||
+					(expired && !report.credentials.has_refresh_token)
+						? "critical"
+						: expired
+							? "warning"
+							: "ok",
+				message: !report.credentials.has_creds
+					? "credentials missing"
+					: expired
+						? "token expired"
+						: "credentials valid",
+				recovery:
+					expired && report.credentials.has_refresh_token
+						? "af auth refresh"
+						: "af auth login",
+			},
+			{
+				check: "cache",
+				severity: report.cache.exists ? "ok" : "warning",
+				message: report.cache.exists ? "cache present" : "cache missing",
+				recovery: "af refresh --rebuild",
+			},
+			{
+				check: "api",
+				severity: !report.credentials.has_creds
+					? "warning"
+					: report.api.error || report.api.user_settings_status !== 200
+						? "critical"
+						: "ok",
+				message:
+					report.api.error ?? `API status ${report.api.user_settings_status}`,
+				recovery: "check network / AF_API_BASE",
+			},
+			{
+				check: "browsers",
+				severity: report.browsers.some((b) => b.detected) ? "ok" : "warning",
+				message: report.browsers.some((b) => b.detected)
+					? "browser detected"
+					: "no browsers detected (needed for browser-scan login)",
+				recovery: "sign in to Akiflow in a desktop browser; af auth login",
+			},
+		];
+		if (report.checks.some((check) => check.severity === "critical"))
+			process.exitCode = 1;
+	}
+	if (!opts.json) {
+		printReport(report);
+		if (report.checks)
+			for (const check of report.checks)
+				console.log(
+					`${check.severity}: ${check.check}: ${check.message}. Recovery: ${check.recovery}`,
+				);
+	} else console.log(JSON.stringify(report, null, 2));
 	return report;
 }
 
@@ -203,12 +277,16 @@ export const doctorCommand = defineCommand({
 			"Diagnostic report on credentials, browsers, cache, and API health",
 	},
 	args: {
+		strict: {
+			type: "boolean",
+			description: "Grade checks and exit nonzero on critical failures",
+		},
 		json: {
 			type: "boolean",
 			description: "Output as JSON instead of human-readable text",
 		},
 	},
 	run: async ({ args }) => {
-		await runDoctor({ json: args.json });
+		await runDoctor({ json: args.json, strict: args.strict });
 	},
 });

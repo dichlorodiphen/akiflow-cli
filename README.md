@@ -27,12 +27,12 @@ mkdir -p ~/.local/bin
 install -m 0755 ./af ~/.local/bin/af
 ```
 
-Install [Bun](https://bun.sh/) first and ensure `~/.local/bin` is on your `PATH`. On each computer, sign in to Akiflow in a browser and run `af auth`; account credentials and the local cache are not stored in this repository.
+Install [Bun](https://bun.sh/) first and ensure `~/.local/bin` is on your `PATH`. On each computer, sign in to Akiflow in a browser and run `af auth login`; account credentials and the local cache are not stored in this repository.
 
 First-time auth requires a desktop browser logged into Akiflow:
 
 ```bash
-af auth
+af auth login
 af auth status
 ```
 

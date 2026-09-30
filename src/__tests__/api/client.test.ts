@@ -525,7 +525,7 @@ describe("AkiflowClient", () => {
 			// when & then
 			await expect(client.getTasks()).rejects.toThrow(AuthError);
 			await expect(client.getTasks()).rejects.toThrow(
-				"No credentials found. Please login first.",
+				"No credentials found. Run 'af auth login' to authenticate.",
 			);
 		});
 

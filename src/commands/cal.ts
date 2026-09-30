@@ -530,7 +530,7 @@ export const cal = defineCommand({
 		} catch (error) {
 			if (error instanceof Error && error.name === "AuthError") {
 				console.error(
-					"Error: Authentication failed. Please run 'af auth' to login.",
+					"Error: Authentication failed. Run 'af auth login' to authenticate.",
 				);
 			} else if (error instanceof CalendarResolutionError) {
 				console.error(`Error: ${error.message}`);

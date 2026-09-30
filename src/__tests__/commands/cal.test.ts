@@ -418,7 +418,7 @@ describe("cal command", () => {
 		// then
 		expect(mockReadResource).toHaveBeenCalled();
 		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			"Error: Authentication failed. Please run 'af auth' to login.",
+			"Error: Authentication failed. Run 'af auth login' to authenticate.",
 		);
 		expect(processExitSpy).toHaveBeenCalledWith(1);
 

@@ -1,6 +1,6 @@
 /// <reference types="bun" />
 import { describe, expect, it, spyOn } from "bun:test";
-import { authCommand } from "../../commands/auth";
+import { authCommand, authLoginCommand } from "../../commands/auth";
 
 describe("auth command", () => {
 	describe("command metadata", () => {
@@ -140,7 +140,9 @@ describe("auth command", () => {
 
 			// then
 			expect(consoleLogSpy).toHaveBeenCalledWith("Not authenticated");
-			expect(consoleLogSpy).toHaveBeenCalledWith("Run 'af auth' to login");
+			expect(consoleLogSpy).toHaveBeenCalledWith(
+				"Run 'af auth login' to authenticate",
+			);
 
 			loadCredentialsSpy.mockRestore();
 		});
@@ -235,7 +237,7 @@ describe("auth command", () => {
 		});
 	});
 
-	describe("main auth command integration", () => {
+	describe("login command integration", () => {
 		it.skipIf(!!process.env.CI)(
 			"calls scanBrowsers for token extraction",
 			async () => {
@@ -248,7 +250,7 @@ describe("auth command", () => {
 
 				// when
 				// biome-ignore lint/suspicious/noExplicitAny: citty CommandContext type is complex
-				await authCommand.run!({} as any);
+				await authLoginCommand.run!({} as any);
 
 				// then
 				expect(scanBrowsersSpy).toHaveBeenCalled();

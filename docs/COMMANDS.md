@@ -128,10 +128,12 @@ Conversion dry-runs by default. Source deletion is only allowed with `--execute 
 
 ```bash
 af project list
-af auth
+af auth login
 af auth status
+af auth logout
+af auth refresh
 af refresh [--rebuild] [--json]
-af doctor [--json]
+af doctor [--json] [--strict]
 af completion bash|zsh|fish
 ```
 
@@ -168,3 +170,9 @@ Mutation `--json` returns a versioned receipt envelope:
 ```
 
 The envelope status is `accepted`, `verified`, `failed`, `unknown`, `pending`, `mismatch`, or `timeout`. Event receipts retain server operation IDs and diagnostics; task/slot receipts identify each requested record and its outcome. `result` contains observed/returned records or the command report, or null; it must not be interpreted as confirmation without `status: "verified"`. Preview output retains its existing report shape because it submits no mutation.
+
+`af auth` prints subcommand help. `af auth login` scans browser sessions.
+`af auth refresh` renews saved tokens without deleting credentials on failure;
+without a refresh token it falls back to login. `af doctor --strict` grades
+checks as ok, warning, or critical, includes recovery instructions (also with
+`--json`), and exits nonzero if any check is critical.

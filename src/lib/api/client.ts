@@ -1,3 +1,8 @@
+import {
+	isTimeout,
+	refreshAccessToken,
+	requestTimeoutMs,
+} from "../auth/refresh";
 import { loadCredentials, saveCredentials } from "../auth/storage";
 import { parseEventMutationResult } from "./mutation-results";
 import type {
@@ -12,17 +17,14 @@ import type {
 	Tag,
 	Task,
 	TimeSlot,
-	TokenRefreshResponse,
 	UpdateTaskPayload,
 	UpdateTimeSlotPayload,
 } from "./types";
-import { AuthError, NetworkError } from "./types";
+import { AuthError, HttpError, NetworkError } from "./types";
 
 // AF_API_BASE override lets integration tests point the client at a fake
 // HTTP server. Default matches Akiflow's production v5 base.
 const BASE_URL = process.env.AF_API_BASE ?? "https://api.akiflow.com";
-const REFRESH_URL =
-	process.env.AF_REFRESH_URL ?? "https://web.akiflow.com/oauth/refreshToken";
 const WEB_CLIENT_ID = "10";
 const DEFAULT_VERSION = "3";
 const DEFAULT_PLATFORM = "web";
@@ -38,7 +40,7 @@ export class AkiflowClient {
 	private credentials: AkiflowCredentials | null = null;
 	private version: string;
 	private platform: string;
-	private isRefreshing = false;
+	private refreshPromise: Promise<boolean> | null = null;
 
 	constructor(options: AkiflowClientOptions = {}) {
 		this.credentials = options.credentials ?? null;
@@ -53,7 +55,9 @@ export class AkiflowClient {
 
 		const stored = await loadCredentials();
 		if (!stored) {
-			throw new AuthError("No credentials found. Please login first.");
+			throw new AuthError(
+				"No credentials found. Run 'af auth login' to authenticate.",
+			);
 		}
 
 		this.credentials = {
@@ -69,58 +73,51 @@ export class AkiflowClient {
 	 * Refresh access token using refresh token
 	 */
 	private async refreshToken(): Promise<boolean> {
-		if (this.isRefreshing) {
-			return false;
-		}
-
-		const creds = await this.getCredentials();
-		if (!creds.refreshToken) {
-			return false;
-		}
-
-		this.isRefreshing = true;
+		if (this.refreshPromise) return this.refreshPromise;
+		this.refreshPromise = this.performRefresh();
 		try {
-			const response = await fetch(REFRESH_URL, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Accept: "application/json",
-				},
-				body: JSON.stringify({
-					client_id: WEB_CLIENT_ID,
-					refresh_token: creds.refreshToken,
-				}),
-			});
+			return await this.refreshPromise;
+		} finally {
+			this.refreshPromise = null;
+		}
+	}
 
-			if (!response.ok) {
-				return false;
-			}
-
-			const data = (await response.json()) as TokenRefreshResponse;
-			if (!data.access_token || !data.refresh_token) {
-				return false;
-			}
-
-			const expiryTimestamp = Date.now() + data.expires_in * 1000;
-
+	private async performRefresh(): Promise<boolean> {
+		const creds = await this.getCredentials();
+		if (!creds.refreshToken) return false;
+		let failure: unknown;
+		const timeoutMs = requestTimeoutMs();
+		const replacement = await refreshAccessToken({
+			refreshToken: creds.refreshToken,
+			clientId: WEB_CLIENT_ID,
+			timeoutMs,
+			onFailure: (error) => {
+				failure = error;
+			},
+		});
+		if (!replacement) {
+			if (isTimeout(failure))
+				throw new NetworkError(
+					`API request timed out after ${timeoutMs}ms: POST /oauth/refreshToken`,
+					failure as Error,
+				);
+			return false;
+		}
+		try {
 			await saveCredentials(
-				data.access_token,
+				replacement.accessToken,
 				creds.clientId,
-				expiryTimestamp,
-				data.refresh_token,
+				replacement.expiresAtMs,
+				replacement.refreshToken,
 			);
-
 			this.credentials = {
-				token: data.access_token,
+				token: replacement.accessToken,
 				clientId: creds.clientId,
-				refreshToken: data.refresh_token,
+				refreshToken: replacement.refreshToken,
 			};
-
 			return true;
 		} catch {
 			return false;
-		} finally {
-			this.isRefreshing = false;
 		}
 	}
 
@@ -150,43 +147,63 @@ export class AkiflowClient {
 		body?: unknown,
 		retried = false,
 	): Promise<ApiResponse<TData>> {
-		const url = `${BASE_URL}${path}`;
+		const url = `${process.env.AF_API_BASE ?? BASE_URL}${path}`;
 		const headers = await this.buildHeaders(method !== "GET");
 
+		const timeoutMs = requestTimeoutMs();
 		let response: Response;
 		try {
 			response = await fetch(url, {
 				method,
+				signal: AbortSignal.timeout(timeoutMs),
 				headers,
 				body: body ? JSON.stringify(body) : undefined,
 			});
 		} catch (error) {
 			throw new NetworkError(
-				"Failed to connect to Akiflow API",
+				isTimeout(error)
+					? `API request timed out after ${timeoutMs}ms: ${method} ${path}`
+					: "Failed to connect to Akiflow API",
 				error instanceof Error ? error : undefined,
 			);
 		}
 
 		if (response.status === 401 && !retried) {
-			const refreshed = await this.refreshToken();
-			if (refreshed) {
+			// A late 401 may arrive after another request has already rotated us.
+			let refreshed =
+				`Bearer ${this.credentials?.token}` !== headers.Authorization;
+			let refreshFailure: unknown;
+			if (!refreshed) {
+				try {
+					refreshed = await this.refreshToken();
+				} catch (error) {
+					refreshFailure = error;
+				}
+			}
+			if (refreshed) return this.request<TData>(method, path, body, true);
+			const stored = await loadCredentials();
+			if (stored && `Bearer ${stored.token}` !== headers.Authorization) {
+				this.credentials = stored;
 				return this.request<TData>(method, path, body, true);
 			}
+			if (refreshFailure) throw refreshFailure;
 			throw new AuthError(
-				"Authentication failed. Token expired and refresh failed. Please run 'af auth' to re-authenticate.",
+				"Authentication failed. Token expired and refresh failed. Run 'af auth login' to authenticate.",
 			);
 		}
 
 		if (response.status === 401) {
 			throw new AuthError(
-				"Authentication failed. Please run 'af auth' to re-authenticate.",
+				"Authentication failed. Run 'af auth login' to authenticate.",
 			);
 		}
 
 		if (!response.ok) {
 			let detail = "";
+			let responseBody: string | null = null;
 			try {
-				const body = (await response.text()).trim();
+				responseBody = await response.text();
+				const body = responseBody.trim();
 				if (body) {
 					try {
 						const parsed = JSON.parse(body) as { message?: unknown };
@@ -198,8 +215,11 @@ export class AkiflowClient {
 			} catch {
 				// Preserve the status-only error if the body cannot be read.
 			}
-			throw new NetworkError(
+			throw new HttpError(
 				`API request failed with status ${response.status}: ${response.statusText}${detail ? ` - ${detail}` : ""}`,
+				response.status,
+				path,
+				responseBody,
 			);
 		}
 
@@ -207,7 +227,9 @@ export class AkiflowClient {
 			return (await response.json()) as ApiResponse<TData>;
 		} catch (error) {
 			throw new NetworkError(
-				"Failed to parse API response",
+				isTimeout(error)
+					? `API request timed out after ${timeoutMs}ms: ${method} ${path}`
+					: "Failed to parse API response",
 				error instanceof Error ? error : undefined,
 			);
 		}

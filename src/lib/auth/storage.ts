@@ -1,4 +1,4 @@
-import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -40,10 +40,17 @@ export async function saveCredentials(
 
 	await ensureConfigDirectory();
 	const credentialsPath = getCredentialsPath();
-	await writeFile(credentialsPath, JSON.stringify(credentials, null, 2), {
-		mode: 0o600,
-	});
-	await chmod(credentialsPath, 0o600);
+	const temporaryPath = `${credentialsPath}.${crypto.randomUUID()}.tmp`;
+	try {
+		await writeFile(temporaryPath, JSON.stringify(credentials, null, 2), {
+			mode: 0o600,
+			flag: "wx",
+		});
+		await chmod(temporaryPath, 0o600);
+		await rename(temporaryPath, credentialsPath);
+	} finally {
+		await unlink(temporaryPath).catch(() => {});
+	}
 }
 
 export async function loadCredentials(): Promise<Credentials | null> {

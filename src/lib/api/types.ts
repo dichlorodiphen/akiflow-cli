@@ -15,6 +15,18 @@ export class NetworkError extends Error {
 	}
 }
 
+export class HttpError extends NetworkError {
+	constructor(
+		message: string,
+		readonly status: number,
+		readonly path: string,
+		readonly responseBody: string | null,
+	) {
+		super(message);
+		this.name = "HttpError";
+	}
+}
+
 export interface ApiResponse<TData> {
 	success: boolean;
 	message: string | null;
