@@ -1,14 +1,10 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { appendFile, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { atomicWrite } from "./atomic";
 
-/**
- * Read every record from a JSONL file. Skips malformed lines (with warning).
- * Returns empty array if the file doesn't exist.
- */
-export async function readAllRecords<T>(filePath: string): Promise<T[]> {
+/** Read synchronously so a pinned generation is consumed before yielding. */
+export function readAllRecordsSync<T>(filePath: string): T[] {
 	if (!existsSync(filePath)) return [];
-	const text = await readFile(filePath, "utf8");
+	const text = readFileSync(filePath, "utf8");
 	const records: T[] = [];
 	for (const line of text.split("\n")) {
 		if (!line.trim()) continue;
@@ -21,53 +17,46 @@ export async function readAllRecords<T>(filePath: string): Promise<T[]> {
 	return records;
 }
 
-/**
- * Append records to a JSONL file (one JSON object per line). Creates the
- * directory if missing. No-op on empty input.
- */
+/** Read records; legacy malformed lines are skipped with a warning. */
+export async function readAllRecords<T>(filePath: string): Promise<T[]> {
+	return readAllRecordsSync<T>(filePath);
+}
+
+/** Append via an atomic replacement; no reader sees a partial appended line. */
 export async function appendRecords<T>(
 	filePath: string,
 	records: T[],
 ): Promise<void> {
 	if (records.length === 0) return;
-	mkdirSync(dirname(filePath), { recursive: true });
-	const payload = `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
-	await appendFile(filePath, payload, "utf8");
+	const existing = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+	const separator = existing && !existing.endsWith("\n") ? "\n" : "";
+	atomicWrite(
+		filePath,
+		`${existing}${separator}${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
+	);
 }
 
-/**
- * Upsert records by extracted key — replaces existing records with matching
- * keys, appends new records that don't match. Rewrites the file. O(n) on
- * file size.
- */
+/** Upsert by key with one crash-atomic replacement of the file. */
 export async function upsertRecords<T>(
 	filePath: string,
 	newRecords: T[],
 	keyOf: (r: T) => string,
 ): Promise<void> {
-	const existing = await readAllRecords<T>(filePath);
+	const existing = readAllRecordsSync<T>(filePath);
 	const newKeys = new Set(newRecords.map(keyOf));
 	const kept = existing.filter((r) => !newKeys.has(keyOf(r)));
-	const merged = [...kept, ...newRecords];
-	mkdirSync(dirname(filePath), { recursive: true });
-	await writeFile(
-		filePath,
-		`${merged.map((r) => JSON.stringify(r)).join("\n")}\n`,
-		"utf8",
-	);
+	await rewriteRecords(filePath, [...kept, ...newRecords]);
 }
 
-/**
- * Replace the file's contents with the given records.
- */
+/** Replace contents atomically against readers (without fsync durability). */
 export async function rewriteRecords<T>(
 	filePath: string,
 	records: T[],
 ): Promise<void> {
-	mkdirSync(dirname(filePath), { recursive: true });
-	await writeFile(
+	atomicWrite(
 		filePath,
-		`${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
-		"utf8",
+		records.length
+			? `${records.map((r) => JSON.stringify(r)).join("\n")}\n`
+			: "",
 	);
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ApiResponse } from "../../../lib/api/types";
@@ -48,10 +48,26 @@ describe("rebuild", () => {
 			"accounts",
 			"contacts",
 		]) {
-			expect(existsSync(join(dir, `${res}.jsonl`))).toBe(true);
+			expect(
+				existsSync(
+					join(
+						dir,
+						readFileSync(join(dir, "current"), "utf8").trim(),
+						`${res}.jsonl`,
+					),
+				),
+			).toBe(true);
 			expect(summary[res as keyof typeof summary].upserted).toBe(1);
 		}
-		expect(existsSync(join(dir, "tokens.json"))).toBe(true);
+		expect(
+			existsSync(
+				join(
+					dir,
+					readFileSync(join(dir, "current"), "utf8").trim(),
+					"tokens.json",
+				),
+			),
+		).toBe(true);
 	});
 });
 

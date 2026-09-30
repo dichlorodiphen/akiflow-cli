@@ -6,7 +6,11 @@ import type {
 	Event,
 	EventModifierPayload,
 } from "../lib/api/types";
-import { readResource, refreshResource, upsertResourceRecords } from "../lib/cache";
+import {
+	readResource,
+	refreshResource,
+	upsertResourceRecords,
+} from "../lib/cache";
 import {
 	createDateTimeUTC,
 	getLocalTimezone,
