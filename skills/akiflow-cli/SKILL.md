@@ -6,9 +6,13 @@ metadata: {"openclaw":{"emoji":"📋","requires":{"bins":["af"]}}}
 
 # Akiflow CLI
 
-Use `af` for Akiflow task and calendar work. Prefer `--json` for reads and parse the cleaned `result` array. Run `af refresh --json` when the user asks for the latest state or after mutations that need verification.
+Use `af` for Akiflow task and calendar work. Prefer `--json --envelope` for reads and parse the cleaned `result` array. Check `schema_version: 1`, `status`, `errors`, and `warnings`; `meta` carries the snapshot and exit code. Legacy JSON remains default with a stderr migration announcement; `AF_JSON_ENVELOPE=1` opts in globally ahead of the announced default flip. Run `af refresh --json` when the user asks for the latest state or after mutations that need verification.
 
-Dates are local calendar dates. Use explicit `YYYY-MM-DD` in commands and reports.
+Dates are local calendar dates. Use explicit `YYYY-MM-DD` in commands and reports. Invalid task-list/cal selectors error rather than broadening the selection or substituting today. Unknown flags/commands and extra positionals fail before auth/cache access (exit 2). Completions are generated from the CLI command tree.
+
+All task/event/slot mutations accept `--dry-run`. Preview first to inspect resolved IDs/titles, normalized before → after values, and notification policy. Previews use the local cache and perform zero writes, authentication, or auto-sync; refresh separately if needed. Batch/convert default to preview; `--execute --dry-run` is rejected. Task plan/snooze/delete support `--json` too.
+
+Exit codes: 0 success; 2 validation; 3 auth; 4 not found; 5 upstream/API; 6 partial success; 7 reserved verification timeout. Unclassified legacy failures retain 1. Cleaned task JSON has full `recurring.rule`, `datetime_tz`, and `calendar_id` (formerly mislabeled `linked_event_id`).
 
 ## Inspect Tasks
 
@@ -88,11 +92,11 @@ Complete tasks only when the user explicitly asks:
 
 ```bash
 af task list --today --plain
-af task complete 1
+af task complete 1 --snapshot <token>
 af task complete <full-uuid>
 ```
 
-Short IDs require the last non-JSON `af task list`; full UUIDs do not. Delete only after explicit user confirmation:
+Every task list publishes a snapshot (text or `meta.snapshot`) and saves numbered context. Numeric IDs without a pin warn in phase 1; supply `--snapshot <token>` on task complete/update/plan/snooze/delete. `AF_STRICT_IDS=1` requires it now; phase 2 will require tokens by default. Mismatched pins fail already. UUID prefixes use the full cached inventory with an explicit warning, falling back to last-list only when unavailable. Full UUIDs need no context. Synthetic `virtual:<uuid>:<date>` rows are marked and cannot be mutated. Delete only after explicit user confirmation:
 
 ```bash
 af task delete <task-id>
@@ -106,6 +110,8 @@ Project listing is read-only:
 af project list
 ```
 
-Known gaps: event delete, all-day events, recurring events, reminders, conferencing, Aki chat messages, and project mutation are unsupported.
+Event deletion supports `af event delete <event-id> --notify all|none --dry-run`; default notifications are `all`. Slot update/delete also accept `--dry-run`.
+
+Known gaps: all-day events, recurring events, reminders, conferencing, Aki chat messages, and project mutation are unsupported.
 
 For Southwest flight rechecks, use Chrome on `https://www.southwest.com/air/flight-status/path?departureDate=YYYY-MM-DD&flightNumber=N`, trust the rendered Southwest status, then update dependent Akiflow events with `af event update`.

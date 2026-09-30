@@ -6,17 +6,19 @@ import type {
 	Event,
 	EventModifierPayload,
 } from "../lib/api/types";
-import {
-	readResource,
-	refreshResource,
-	upsertResourceRecords,
-} from "../lib/cache";
+import { refreshResource, upsertResourceRecords } from "../lib/cache";
 import {
 	createDateTimeUTC,
 	getLocalTimezone,
 	parseDate,
 	parseTime,
 } from "../lib/date-parser";
+import {
+	dryRunArgs,
+	mutationReader,
+	previewItem,
+	printDryRun,
+} from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { createEventCommand } from "./create";
 
@@ -353,6 +355,7 @@ export const eventUpdateCommand = defineCommand({
 		description: "Update timing and basic fields for a timed Google event",
 	},
 	args: {
+		...dryRunArgs,
 		id: {
 			type: "positional",
 			description: "Event id or unique id prefix",
@@ -401,8 +404,11 @@ export const eventUpdateCommand = defineCommand({
 		// Refresh events first so the update's operation base is built from the
 		// latest server state. Without this, back-to-back updates build the
 		// second operation from stale cache and the server silently drops it.
-		await refreshResource(client, "events");
-		const events = await readResource(client, "events");
+		if (!args["dry-run"]) await refreshResource(client, "events");
+		const events = await mutationReader(args["dry-run"] === true)(
+			client,
+			"events",
+		);
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
 
@@ -431,6 +437,19 @@ export const eventUpdateCommand = defineCommand({
 			endTime,
 		});
 
+		if (args["dry-run"]) {
+			printDryRun(
+				[
+					previewItem(
+						event,
+						payload,
+						String(payload.content?.sendUpdates ?? "all"),
+					),
+				],
+				args.json === true,
+			);
+			return;
+		}
 		const response = await client.createEvents([payload]);
 		const updatedEvent = response.data[0];
 		if (!updatedEvent) fail("Failed to update event - no data returned");
@@ -461,6 +480,7 @@ export const eventDeleteCommand = defineCommand({
 		description: "Soft-delete a timed Google calendar event",
 	},
 	args: {
+		...dryRunArgs,
 		id: {
 			type: "positional",
 			description: "Event id or unique id prefix",
@@ -484,11 +504,27 @@ export const eventDeleteCommand = defineCommand({
 			fail(`Invalid --notify "${notify}". Expected "all" or "none".`);
 		}
 
-		const events = await readResource(client, "events");
+		const events = await mutationReader(args["dry-run"] === true)(
+			client,
+			"events",
+		);
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
 
 		const payload = buildEventDeletePayload({ event, notify });
+		if (args["dry-run"]) {
+			printDryRun(
+				[
+					previewItem(
+						event,
+						payload,
+						String(payload.content?.sendUpdates ?? "all"),
+					),
+				],
+				args.json === true,
+			);
+			return;
+		}
 		const response = await client.createEvents([payload]);
 		const deletedEvent = response.data[0];
 		if (!deletedEvent) fail("Failed to delete event - no data returned");
@@ -510,7 +546,10 @@ async function runAttendeeCommand(
 	mode: "add" | "remove",
 ): Promise<void> {
 	const client = createClient();
-	const events = await readResource(client, "events");
+	const events = await mutationReader(args["dry-run"] === true)(
+		client,
+		"events",
+	);
 	const event = resolveCachedEvent(events, args.id as string);
 	validateMutableTimedGoogleEvent(event);
 
@@ -521,6 +560,20 @@ async function runAttendeeCommand(
 			? requested.filter((email) => !existing.has(email))
 			: requested.filter((email) => existing.has(email));
 
+	if (args["dry-run"]) {
+		const after = {
+			...event,
+			attendees:
+				mode === "add"
+					? [...existing, ...toChange]
+					: [...existing].filter((email) => !toChange.includes(email)),
+		};
+		printDryRun(
+			[previewItem({ ...event, attendees: [...existing] }, after, "all")],
+			args.json === true,
+		);
+		return;
+	}
 	if (toChange.length === 0) {
 		const message =
 			mode === "add"
@@ -575,6 +628,7 @@ export const attendeeAddCommand = defineCommand({
 		description: "Add attendee emails to a timed Google event",
 	},
 	args: {
+		...dryRunArgs,
 		id: {
 			type: "positional",
 			description: "Event id or unique id prefix",
@@ -601,6 +655,7 @@ export const attendeeRemoveCommand = defineCommand({
 		description: "Remove attendee emails from a timed Google event",
 	},
 	args: {
+		...dryRunArgs,
 		id: {
 			type: "positional",
 			description: "Event id or unique id prefix",

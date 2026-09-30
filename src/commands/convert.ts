@@ -6,7 +6,6 @@ import type {
 	Task,
 	UpdateTaskPayload,
 } from "../lib/api/types";
-import { readResource } from "../lib/cache";
 import {
 	CalendarResolutionError,
 	resolveEventTargetCalendar,
@@ -20,6 +19,13 @@ import {
 	resolveSingleDayRange,
 	startOfDay,
 } from "../lib/date-parser";
+import {
+	dryRunArgs,
+	dryRunCalendar,
+	mutationReader,
+	previewItem,
+	printDryRun,
+} from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import {
 	filterTasks,
@@ -273,6 +279,13 @@ function printJsonSummary(
 					duration_seconds: candidate.durationSeconds,
 					action: candidate.match ? "matched" : "create",
 					matched_event_id: candidate.match?.id ?? null,
+					before: candidate.match ?? null,
+					after: candidate.match ?? candidate.payload,
+					notification_policy: "all",
+					source_before: deleteSource ? candidate.task : undefined,
+					source_after: deleteSource
+						? { ...candidate.task, deleted_at: "on execution" }
+						: undefined,
 				})),
 			},
 			null,
@@ -287,6 +300,7 @@ export const convertTasksCommand = defineCommand({
 		description: "Convert Akiflow tasks to another surface",
 	},
 	args: {
+		...dryRunArgs,
 		to: {
 			type: "string",
 			description: "Target surface; v1 supports only events",
@@ -366,8 +380,8 @@ export const convertTasksCommand = defineCommand({
 			? parseDurationToSeconds(rawArgs["default-duration"] as string)
 			: null;
 		const [tasks, events] = await Promise.all([
-			readResource(client, "tasks"),
-			readResource(client, "events"),
+			mutationReader(rawArgs.execute !== true)(client, "tasks"),
+			mutationReader(rawArgs.execute !== true)(client, "events"),
 		]);
 		const selectedTasks = selectTasks(tasks, rawArgs);
 		const validationErrors = validateSelectedTasks(
@@ -384,11 +398,14 @@ export const convertTasksCommand = defineCommand({
 
 		let calendar: Awaited<ReturnType<typeof resolveEventTargetCalendar>>;
 		try {
-			calendar = await resolveEventTargetCalendar(
-				client,
-				rawArgs.calendar as string | undefined,
-				"af convert tasks --to events",
-			);
+			calendar =
+				rawArgs.execute !== true
+					? await dryRunCalendar(rawArgs.calendar as string | undefined, true)
+					: await resolveEventTargetCalendar(
+							client,
+							rawArgs.calendar as string | undefined,
+							"af convert tasks --to events",
+						);
 		} catch (error) {
 			if (error instanceof CalendarResolutionError) {
 				console.error(`Error: ${error.message}`);
@@ -410,6 +427,19 @@ export const convertTasksCommand = defineCommand({
 				printJsonSummary(candidates, "dry-run", deleteSource);
 			} else {
 				console.log(formatPreview(candidates, deleteSource, false));
+				printDryRun(
+					candidates.flatMap((candidate) => [
+						previewItem(null, candidate.payload, "all"),
+						...(deleteSource
+							? [
+									previewItem(candidate.task, {
+										...candidate.task,
+										deleted_at: "on execution",
+									}),
+								]
+							: []),
+					]),
+				);
 			}
 			return;
 		}

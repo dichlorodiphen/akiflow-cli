@@ -153,3 +153,21 @@ describe("toCleanedTaskView — overdue", () => {
 		).toBe(false);
 	});
 });
+
+describe("cleaned task contract corrections", () => {
+	test("emits the entire recurrence rule, calendar semantics and datetime timezone", () => {
+		const view = toCleanedTaskView(
+			task({
+				recurring_id: "series",
+				recurrence: "RRULE:FREQ=WEEKLY;BYDAY=MO",
+				calendar_id: "calendar-1",
+				datetime_tz: "Europe/London",
+			}),
+			ctx(),
+		);
+		expect(view.recurring?.rule).toBe("RRULE:FREQ=WEEKLY;BYDAY=MO");
+		expect(view.calendar_id).toBe("calendar-1");
+		expect(view).not.toHaveProperty("linked_event_id");
+		expect(view.datetime_tz).toBe("Europe/London");
+	});
+});

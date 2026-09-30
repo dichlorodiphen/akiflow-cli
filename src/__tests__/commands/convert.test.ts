@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { convertTasksCommand } from "../../commands/convert";
 import type { Calendar, Event, Task } from "../../lib/api/types";
 import * as storage from "../../lib/auth/storage";
@@ -159,8 +162,25 @@ describe("convert tasks command", () => {
 	let fetchSpy: ReturnType<typeof spyOn>;
 	let loadCredentialsSpy: ReturnType<typeof spyOn>;
 	let readResourceSpy: ReturnType<typeof spyOn>;
+	let testCacheDir: string;
+	let previousCacheDir: string | undefined;
+	function seedTasks(records: Task[]) {
+		writeFileSync(
+			join(testCacheDir, "tasks.jsonl"),
+			records.map((record) => JSON.stringify(record)).join("\n"),
+		);
+	}
 
 	beforeEach(() => {
+		previousCacheDir = process.env.AF_CACHE_DIR;
+		testCacheDir = mkdtempSync(join(tmpdir(), "af-convert-unit-"));
+		process.env.AF_CACHE_DIR = testCacheDir;
+		seedTasks([task()]);
+		writeFileSync(join(testCacheDir, "events.jsonl"), "");
+		writeFileSync(
+			join(testCacheDir, "calendars.jsonl"),
+			JSON.stringify(calendar()),
+		);
 		fetchSpy = spyOn(globalThis, "fetch");
 		loadCredentialsSpy = spyOn(storage, "loadCredentials").mockResolvedValue(
 			mockCredentials,
@@ -175,6 +195,9 @@ describe("convert tasks command", () => {
 	});
 
 	afterEach(() => {
+		rmSync(testCacheDir, { recursive: true, force: true });
+		if (previousCacheDir === undefined) delete process.env.AF_CACHE_DIR;
+		else process.env.AF_CACHE_DIR = previousCacheDir;
 		fetchSpy.mockRestore();
 		loadCredentialsSpy.mockRestore();
 		readResourceSpy.mockRestore();
@@ -194,6 +217,8 @@ describe("convert tasks command", () => {
 		} as any);
 
 		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(loadCredentialsSpy).not.toHaveBeenCalled();
+		expect(readResourceSpy).not.toHaveBeenCalled();
 		expect(consoleLogSpy.mock.calls.join("\n")).toContain(
 			"Conversion plan: tasks -> events",
 		);
@@ -362,6 +387,7 @@ describe("convert tasks command", () => {
 	});
 
 	it("rejects missing task durations without --default-duration", async () => {
+		seedTasks([task({ duration: null })]);
 		readResourceSpy.mockImplementation((_client: unknown, resource: string) => {
 			if (resource === "tasks")
 				return Promise.resolve([task({ duration: null })]);
@@ -389,6 +415,7 @@ describe("convert tasks command", () => {
 	});
 
 	it("rejects connector-backed source deletion", async () => {
+		seedTasks([task({ connector_id: "todoist" })]);
 		readResourceSpy.mockImplementation((_client: unknown, resource: string) => {
 			if (resource === "tasks")
 				return Promise.resolve([task({ connector_id: "todoist" })]);

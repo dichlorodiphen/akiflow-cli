@@ -6,14 +6,14 @@
 // Two-part check:
 //   1. package.json itself has a sane version string (catches the
 //      "release recipe forgot to bump akiflow-cli" failure).
-//   2. src/index.ts's `meta.version` references pkg.version (not a
+//   2. src/command-tree.ts's `meta.version` references pkg.version (not a
 //      hardcoded literal). Structural assertion against the source
 //      text — catches anyone re-hardcoding a version literal.
 //
 // We don't spawn the bun-compiled binary here (slow, needs build
 // setup); the structural check above is enough since bun's
 // `--compile` bundles the JSON import into the binary at build time,
-// so what index.ts reads at parse time IS what the binary ships.
+// so what command-tree.ts reads at parse time IS what the binary ships.
 
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -30,9 +30,9 @@ describe("af --version source", () => {
 		expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$/);
 	});
 
-	it("index.ts wires meta.version to pkg.version (not a literal)", () => {
+	it("command-tree.ts wires meta.version to pkg.version (not a literal)", () => {
 		const indexSource = readFileSync(
-			join(import.meta.dir, "..", "index.ts"),
+			join(import.meta.dir, "..", "command-tree.ts"),
 			"utf-8",
 		);
 		// The metadata block should reference pkg.version, not a

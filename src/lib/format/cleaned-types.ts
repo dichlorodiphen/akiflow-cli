@@ -31,6 +31,7 @@ export interface CleanedTaskView {
 	description: string | null;
 	date: string | null;
 	datetime: string | null;
+	datetime_tz: string | null;
 	duration_min: number | null;
 	duration_seconds: number | null;
 	due_date: string | null;
@@ -42,7 +43,7 @@ export interface CleanedTaskView {
 	tags: string[];
 	source: CleanedSource | null;
 	recurring: { id: string; rule: string } | null;
-	linked_event_id: string | null;
+	calendar_id: string | null;
 	linked_slot_id: string | null;
 	created_at: string;
 	updated_at: string;
@@ -109,6 +110,7 @@ export function toCleanedTaskView(
 		description: t.description,
 		date: t.date,
 		datetime: t.datetime,
+		datetime_tz: t.datetime_tz,
 		duration_min: t.duration == null ? null : t.duration / 60,
 		duration_seconds: t.duration,
 		due_date: t.due_date,
@@ -120,10 +122,13 @@ export function toCleanedTaskView(
 		tags: t.tags_ids,
 		source: extractSource(t, ctx),
 		recurring:
-			t.recurring_id && t.recurrence?.[0]
-				? { id: t.recurring_id, rule: t.recurrence[0] }
+			t.recurring_id && t.recurrence
+				? {
+						id: t.recurring_id,
+						rule: Array.isArray(t.recurrence) ? t.recurrence[0] : t.recurrence,
+					}
 				: null,
-		linked_event_id: t.calendar_id,
+		calendar_id: t.calendar_id,
 		linked_slot_id: t.time_slot_id,
 		created_at: t.global_created_at,
 		updated_at: t.global_updated_at,

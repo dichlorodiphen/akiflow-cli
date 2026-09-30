@@ -260,10 +260,11 @@ describe("task complete command", () => {
 			if (!(error instanceof ExitError)) {
 				throw error;
 			}
+			expect(error.code).toBe(4);
 		}
 
 		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			expect.stringContaining("Short IDs and partial IDs require context"),
+			expect.stringContaining("Numeric short IDs require list context"),
 		);
 	});
 

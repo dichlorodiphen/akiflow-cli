@@ -10,6 +10,13 @@ import {
 	parseTime,
 } from "../../lib/date-parser";
 import {
+	cachedTask,
+	dryRunArgs,
+	previewItem,
+	printDryRun,
+	snapshotArgs,
+} from "../../lib/dry-run";
+import {
 	parseDuration,
 	parseDurationToSeconds,
 } from "../../lib/duration-parser";
@@ -26,24 +33,24 @@ function formatDate(date: Date): string {
 	return `${year}-${month}-${day}`;
 }
 
-function fail(message: string): never {
+function fail(message: string, exitCode = 1): never {
 	console.error(`Error: ${message}`);
-	process.exit(1);
+	process.exit(exitCode);
 }
 
-function resolveTaskIdentifier(identifier: string): string {
+function resolveTaskIdentifier(identifier: string, snapshot?: string): string {
 	const contextFile = readTaskContext();
 	try {
-		const taskId = resolveTaskId(identifier, contextFile);
+		const taskId = resolveTaskId(identifier, contextFile, { snapshot });
 		if (taskId) return taskId;
 	} catch (error) {
-		fail(error instanceof Error ? error.message : String(error));
+		fail(error instanceof Error ? error.message : String(error), 2);
 	}
 
 	const suffix = contextFile
 		? ""
-		: " Short IDs and partial IDs require context. Run 'af task list --plain' first or provide a full UUID.";
-	fail(`Could not resolve task ID "${identifier}".${suffix}`);
+		: " Numeric short IDs require list context. Run 'af task list --plain' first or provide a full UUID.";
+	fail(`Could not resolve task ID "${identifier}".${suffix}`, 4);
 }
 
 async function resolveDescriptionUpdate(
@@ -70,6 +77,8 @@ export const taskUpdateCommand = defineCommand({
 		description: "Update basic fields for an Akiflow task",
 	},
 	args: {
+		...dryRunArgs,
+		...snapshotArgs,
 		id: {
 			type: "positional",
 			description: "Task ID, short ID, or unique ID prefix",
@@ -106,7 +115,10 @@ export const taskUpdateCommand = defineCommand({
 	},
 	run: async (context) => {
 		const args = context.args as Record<string, unknown>;
-		const taskId = resolveTaskIdentifier(args.id as string);
+		const taskId = resolveTaskIdentifier(
+			args.id as string,
+			args.snapshot as string | undefined,
+		);
 		const description = await resolveDescriptionUpdate(
 			args.description as string | undefined,
 			args["description-file"] as string | undefined,
@@ -142,6 +154,13 @@ export const taskUpdateCommand = defineCommand({
 		}
 
 		const client = createClient();
+		if (context.args["dry-run"]) {
+			printDryRun(
+				[previewItem(await cachedTask(taskId), updatePayload)],
+				context.args.json === true,
+			);
+			return;
+		}
 		const response = await client.upsertTasks([updatePayload]);
 		const updatedTask = response.data[0];
 
@@ -168,6 +187,9 @@ export const taskPlanCommand = defineCommand({
 		description: "Schedule task for a specific date",
 	},
 	args: {
+		...dryRunArgs,
+		...snapshotArgs,
+		json: { type: "boolean", description: "Output result as JSON" },
 		id: {
 			type: "positional",
 			description: "Task ID (short ID or UUID)",
@@ -188,7 +210,10 @@ export const taskPlanCommand = defineCommand({
 		const id = context.args.id as string;
 		const dateArg = context.args.date as string | undefined;
 		const atArg = context.args.at as string | undefined;
-		const taskId = resolveTaskIdentifier(id);
+		const taskId = resolveTaskIdentifier(
+			id,
+			context.args.snapshot as string | undefined,
+		);
 
 		let dateStr: string;
 
@@ -247,6 +272,13 @@ export const taskPlanCommand = defineCommand({
 		}
 
 		try {
+			if (context.args["dry-run"]) {
+				printDryRun(
+					[previewItem(await cachedTask(taskId), updatePayload)],
+					context.args.json === true,
+				);
+				return;
+			}
 			const response = await client.upsertTasks([updatePayload]);
 
 			if (response.success) {
@@ -276,6 +308,9 @@ export const taskSnoozeCommand = defineCommand({
 		description: "Push task back by a duration (e.g., 1h, 2d, 1w)",
 	},
 	args: {
+		...dryRunArgs,
+		...snapshotArgs,
+		json: { type: "boolean", description: "Output result as JSON" },
 		id: {
 			type: "positional",
 			description: "Task ID (short ID or UUID)",
@@ -290,7 +325,10 @@ export const taskSnoozeCommand = defineCommand({
 	run: async (context) => {
 		const id = context.args.id as string;
 		const durationArg = context.args.duration as string;
-		const taskId = resolveTaskIdentifier(id);
+		const taskId = resolveTaskIdentifier(
+			id,
+			context.args.snapshot as string | undefined,
+		);
 
 		let snoozeDuration: number;
 		try {
@@ -303,7 +341,9 @@ export const taskSnoozeCommand = defineCommand({
 		}
 
 		const client = createClient();
-		const allTasksResponse = await client.getTasks();
+		const allTasksResponse = context.args["dry-run"]
+			? { success: true, data: [await cachedTask(taskId)] }
+			: await client.getTasks();
 		if (!allTasksResponse.success || !allTasksResponse.data) {
 			console.error("Error: Failed to fetch tasks");
 			process.exit(1);
@@ -331,6 +371,13 @@ export const taskSnoozeCommand = defineCommand({
 		};
 
 		try {
+			if (context.args["dry-run"]) {
+				printDryRun(
+					[previewItem(await cachedTask(taskId), updatePayload)],
+					context.args.json === true,
+				);
+				return;
+			}
 			const response = await client.upsertTasks([updatePayload]);
 
 			if (response.success) {
@@ -356,6 +403,9 @@ export const taskDeleteCommand = defineCommand({
 		description: "Soft delete a task",
 	},
 	args: {
+		...dryRunArgs,
+		...snapshotArgs,
+		json: { type: "boolean", description: "Output result as JSON" },
 		id: {
 			type: "positional",
 			description: "Task ID (short ID or UUID)",
@@ -364,7 +414,10 @@ export const taskDeleteCommand = defineCommand({
 	},
 	run: async (context) => {
 		const id = context.args.id as string;
-		const taskId = resolveTaskIdentifier(id);
+		const taskId = resolveTaskIdentifier(
+			id,
+			context.args.snapshot as string | undefined,
+		);
 
 		const client = createClient();
 		const timestamp = new Date().toISOString();
@@ -376,6 +429,13 @@ export const taskDeleteCommand = defineCommand({
 		};
 
 		try {
+			if (context.args["dry-run"]) {
+				printDryRun(
+					[previewItem(await cachedTask(taskId), updatePayload)],
+					context.args.json === true,
+				);
+				return;
+			}
 			const response = await client.upsertTasks([updatePayload]);
 
 			if (response.success) {
