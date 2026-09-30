@@ -442,7 +442,7 @@ export const taskPlanCommand = defineCommand({
 			);
 			return;
 		}
-		await submitTaskMutation(client, "task plan", context.args, updatePayload);
+		await submitTaskMutation(client, "task plan", context.args, updatePayload, "plan");
 	},
 });
 
@@ -520,9 +520,9 @@ export const taskSnoozeCommand = defineCommand({
 		const fold = foldArg as "first" | "second" | undefined;
 
 		const client = createClient();
-		const allTasksResponse = context.args["dry-run"]
-			? { success: true, data: [await cachedTask(taskId)] }
-			: await client.getTasks();
+		// D: Task reads are local via unified repository; no server GET.
+		const allTasks = await readTasks(client);
+		const allTasksResponse = { success: true, data: allTasks };
 		if (!allTasksResponse.success || !allTasksResponse.data) {
 			console.error("Error: Failed to fetch tasks");
 			process.exit(1);
@@ -625,6 +625,7 @@ export const taskSnoozeCommand = defineCommand({
 			"task snooze",
 			context.args,
 			updatePayload,
+			"snooze",
 		);
 	},
 });

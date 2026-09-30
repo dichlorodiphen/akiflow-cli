@@ -154,7 +154,12 @@ function requireActiveSlot(slot: TimeSlot): void {
 
 function activeLinkedTasks(tasks: Task[], slotId: string): Task[] {
 	return tasks.filter(
-		(task) => task.deleted_at == null && task.time_slot_id === slotId,
+		(task) =>
+			task.deleted_at == null &&
+			task.time_slot_id === slotId &&
+			// D: Exclude trashed tasks (status 10 or trashed_at set)
+			task.trashed_at == null &&
+			task.status !== 10,
 	);
 }
 
@@ -567,9 +572,10 @@ export const showSlotCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		// D: Tasks use unified repository with pending overlay; slots use standard reader.
 		const [slots, tasks] = await Promise.all([
 			mutationReader(args["dry-run"] === true)(client, "time_slots"),
-			mutationReader(args["dry-run"] === true)(client, "tasks"),
+			readTasks(client),
 		]);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		requireActiveSlot(slot);
@@ -778,6 +784,13 @@ export const updateSlotCommand = defineCommand({
 							r.id === task.id && ["accepted", "verified"].includes(r.status),
 					),
 				);
+				// D: Record pending intents for slot-linked task updates.
+				for (const receipt of outcome.receipts) {
+					if (receipt.status === "accepted" || receipt.status === "verified") {
+						const payload = taskPayloads.find((p) => p.id === receipt.id);
+						if (payload) await recordTaskIntent("update", payload);
+					}
+				}
 			} catch (error) {
 				outcomes.push(
 					unknownTaskOutcome(

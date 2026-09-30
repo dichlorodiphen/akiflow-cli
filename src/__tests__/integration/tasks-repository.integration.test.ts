@@ -22,6 +22,7 @@ const task = (fields: Record<string, unknown> = {}) => ({
 	datetime_tz: "UTC",
 	duration: 1800,
 	time_slot_id: "slot-focus-1",
+	calendar_id: "cal-personal-1",
 	...fields,
 });
 const cli = (args: string[]) =>
@@ -152,6 +153,13 @@ describe("unified repository command regressions", () => {
 			if (scenario.kind === "delete") {
 				expect(listed).toBeUndefined();
 				expect(calendarRow).toBeUndefined();
+			} else if (scenario.kind === "complete") {
+				// Completed tasks are excluded from cal (J's done filter), but list shows pending.
+				expect(listed).toMatchObject({ ...scenario.fields, pending: true });
+				expect(calendarRow).toBeUndefined();
+				expect((await list(false)).find((t) => t.id === target)?.pending).toBe(
+					true,
+				);
 			} else {
 				expect(listed).toMatchObject({ ...scenario.fields, pending: true });
 				expect(calendarRow?.record).toMatchObject({
@@ -175,7 +183,7 @@ describe("unified repository command regressions", () => {
 			).toHaveLength(0);
 		}, 20_000);
 
-	test("date-only planning clears an old timed schedule in both views", async () => {
+	test("date-only planning preserves wall-clock time in both views", async () => {
 		const planned = await cli(["task", "plan", id, "--date", "2026-05-22"]);
 		expect(planned.exitCode, planned.stderr).toBe(0);
 		expect((await list())[0]).toMatchObject({
@@ -185,7 +193,10 @@ describe("unified repository command regressions", () => {
 			datetime: "2026-05-22T09:00:00.000Z",
 			pending: true,
 		});
-		expect(await cal()).toHaveLength(0);
+		// The preserved datetime keeps the task visible in cal on the new date.
+		const rows = await cal();
+		expect(rows).toHaveLength(1);
+		expect((rows[0]?.record as Record<string, unknown>).id).toBe(id);
 	}, 20_000);
 	test("generated virtual rows remain query-only and completing a master stays sticky", async () => {
 		observed = [
