@@ -169,6 +169,7 @@ describe("slot command", () => {
 	});
 
 	afterEach(() => {
+		process.exitCode = 0;
 		fetchSpy.mockRestore();
 		loadCredentialsSpy.mockRestore();
 		readResourceSpy.mockRestore();
@@ -441,7 +442,7 @@ describe("slot command", () => {
 			time_slot_id: null,
 		});
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			"✓ Akiflow task slot updated successfully",
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -516,7 +517,7 @@ describe("slot command", () => {
 			},
 		]);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			"✓ Akiflow task slot deleted successfully",
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -550,7 +551,7 @@ describe("slot command", () => {
 		} as never);
 
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			JSON.stringify(deletedSlot, null, 2),
+			expect.stringContaining('"schema_version": 1'),
 		);
 
 		consoleLogSpy.mockRestore();

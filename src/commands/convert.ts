@@ -1,12 +1,15 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import { checkTaskMutationResult } from "../lib/api/task-results";
 import type {
 	CreateEventPayload,
 	Event,
+	MutationReceipt,
 	Task,
 	UpdateTaskPayload,
 } from "../lib/api/types";
-import { readResource } from "../lib/cache";
+import { isReadOnlyCanonical } from "../lib/api/types";
+import { readResource, upsertResourceRecords } from "../lib/cache";
 import {
 	CalendarResolutionError,
 	resolveEventTargetCalendar,
@@ -26,6 +29,12 @@ import {
 	type StatusName,
 	type TaskFilter,
 } from "../lib/filters/task";
+import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import {
+	type VerificationResult,
+	verifyEventFields,
+} from "../lib/verification";
+import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 import { buildCreateEventPayload } from "./create";
 
 const NAMED_RANGE_FLAGS: ReadonlyArray<NamedRange> = [
@@ -298,7 +307,8 @@ export const convertTasksCommand = defineCommand({
 		},
 		"delete-source": {
 			type: "boolean",
-			description: "Soft-delete source tasks after successful event creation",
+			description:
+				"Soft-delete sources only after every target is freshly verified",
 		},
 		"default-duration": {
 			type: "string",
@@ -351,6 +361,7 @@ export const convertTasksCommand = defineCommand({
 		bucket: { type: "string", description: "week | month" },
 		recurring: { type: "boolean", description: "Only recurring tasks" },
 		json: { type: "boolean", description: "Output summary as JSON" },
+		verify: verifyFlag,
 	},
 	run: async ({ args }) => {
 		const rawArgs = args as Record<string, unknown>;
@@ -415,19 +426,54 @@ export const convertTasksCommand = defineCommand({
 		}
 
 		const toCreate = candidates.filter((candidate) => !candidate.match);
-		if (toCreate.length > 0) {
-			const response = await client.createEvents(
-				toCreate.map((candidate) => candidate.payload),
-			);
-			if (response.data.length !== toCreate.length) {
-				console.error(
-					"Error: Failed to create all target events; source tasks were not deleted.",
+		const receipts: MutationReceipt[] = toCreate.length
+			? (
+					await client.createEvents(
+						toCreate.map((candidate) => candidate.payload),
+					)
+				).receipts
+			: [];
+		const verifications = new Map<string, VerificationResult<Event>>();
+		const errors: string[] = [];
+		if (rawArgs.verify === true || deleteSource) {
+			for (const candidate of candidates) {
+				const id = candidate.match?.id ?? candidate.payload.id;
+				const receipt = receipts.find((item) => item.event_id === id);
+				if (!candidate.match && receipt?.status !== "accepted") {
+					if (deleteSource)
+						errors.push(
+							`Unverified target ${id}: ${receipt?.status ?? "unknown"}; source tasks were not deleted.`,
+						);
+					continue;
+				}
+				const verification = await verifyEventFields(
+					client,
+					id,
+					eventExpectedFields(candidate.payload),
+					verificationOptions(),
 				);
-				process.exit(1);
+				if (isReadOnlyCanonical(verification.observed)) {
+					if (verification.observed)
+						await upsertResourceRecords("events", [verification.observed]);
+					verification.status = "mismatch";
+					verification.differingFields.push("read_only");
+					verification.error = `Target ${id} is read-only; source deletion refused.`;
+					errors.push(verification.error);
+				}
+				verifications.set(id, verification);
+				if (verification.status !== "verified")
+					errors.push(
+						`Unverified target ${id}: ${verification.status}; source tasks were not deleted.`,
+					);
 			}
 		}
-
-		if (deleteSource && candidates.length > 0) {
+		const targetsVerified = candidates.every(
+			(candidate) =>
+				verifications.get(candidate.match?.id ?? candidate.payload.id)
+					?.status === "verified",
+		);
+		let deletion: ReturnType<typeof checkTaskMutationResult> | null = null;
+		if (deleteSource && targetsVerified && candidates.length > 0) {
 			const timestamp = new Date().toISOString();
 			const deletePayloads: UpdateTaskPayload[] = candidates.map(
 				(candidate) => ({
@@ -436,21 +482,106 @@ export const convertTasksCommand = defineCommand({
 					global_updated_at: timestamp,
 				}),
 			);
-			const response = await client.upsertTasks(deletePayloads);
-			if (!response.success) {
-				console.error(
-					"Error: Events were created, but source task deletion failed.",
+			try {
+				deletion = checkTaskMutationResult(
+					await client.upsertTasks(deletePayloads),
+					deletePayloads.map((payload) => payload.id),
 				);
-				console.error(response.message);
-				process.exit(1);
+			} catch (error) {
+				deletion = checkTaskMutationResult(
+					{ success: false, data: [], message: String(error) },
+					deletePayloads.map((payload) => payload.id),
+				);
 			}
+			if (!deletion.ok)
+				errors.push(
+					...deletion.errors,
+					...deletion.failedIds.map((id) => `Source deletion failed: ${id}`),
+					...deletion.unknownIds.map((id) => `Source deletion unknown: ${id}`),
+				);
 		}
-
-		if (rawArgs.json) {
-			printJsonSummary(candidates, "execute", deleteSource);
-		} else {
-			console.log(formatPreview(candidates, deleteSource, true));
+		const verificationStatus = [...verifications.values()].find(
+			(item) => item.status !== "verified",
+		)?.status;
+		const status =
+			deletion && !deletion.ok
+				? deletion.failedIds.length
+					? "failed"
+					: "unknown"
+				: deletion?.ok
+					? "accepted"
+					: (verificationStatus ??
+						(receipts.every((receipt) => receipt.status === "accepted") &&
+						targetsVerified
+							? "verified"
+							: undefined));
+		const result = {
+			mode: "execute",
+			selected: candidates.length,
+			matched: candidates.filter((candidate) => candidate.match).length,
+			to_create: toCreate.length,
+			to_delete: deleteSource ? candidates.length : 0,
+			deleted_source_ids: deletion?.succeededIds ?? [],
+			items: candidates.map((candidate) => ({
+				task_id: candidate.task.id,
+				event_id: candidate.match?.id ?? candidate.payload.id,
+				title: candidate.task.title,
+				action: candidate.match ? "matched" : "submitted",
+			})),
+		};
+		const outcome = outputMutation({
+			command: "convert tasks",
+			json: rawArgs.json === true,
+			receipts,
+			additionalReceipts: [
+				...[...verifications]
+					.filter(
+						([id]) => !receipts.some((receipt) => receipt.event_id === id),
+					)
+					.map(([id, verification]) => ({
+						event_id: id,
+						kind: "observation",
+						status: verification.status,
+						verification,
+					})),
+				...(deletion
+					? [
+							...deletion.succeededIds.map((id) => ({
+								task_id: id,
+								kind: "delete",
+								status: "accepted",
+							})),
+							...deletion.failedIds.map((id) => ({
+								task_id: id,
+								kind: "delete",
+								status: "failed",
+							})),
+							...deletion.unknownIds.map((id) => ({
+								task_id: id,
+								kind: "delete",
+								status: "unknown",
+							})),
+						]
+					: []),
+			],
+			verifications,
+			status,
+			result,
+			errors,
+		});
+		if (!rawArgs.json) {
+			console.log(`Already matched events: ${result.matched}`);
+			for (const [id, verification] of verifications) {
+				if (!receipts.some((receipt) => receipt.event_id === id))
+					console.log(`Target ${id}: ${verification.status}`);
+			}
+			if (deletion)
+				console.log(
+					`Source deletion accepted: ${deletion.succeededIds.join(", ") || "none"}`,
+				);
 		}
+		if (!["accepted", "verified"].includes(outcome) || errors.length)
+			process.exitCode = 1;
 	},
 });
 

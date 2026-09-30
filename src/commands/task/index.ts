@@ -15,9 +15,45 @@ import {
 } from "../../lib/duration-parser";
 import { removePendingTask } from "../../lib/task-cache";
 import { readTaskContext, resolveTaskId } from "../../lib/task-context";
+import {
+	printTaskMutation,
+	taskMutationOutcome,
+	unknownTaskOutcome,
+} from "../../lib/task-mutation-output";
+import { verifyFlag } from "../../lib/verify-flag";
 import { createTaskCommand } from "../create";
 import { taskCompleteCommand } from "../do";
 import { taskListCommand } from "../ls";
+
+async function submitTaskMutation(
+	client: ReturnType<typeof createClient>,
+	command: string,
+	args: Record<string, unknown>,
+	payload: UpdateTaskPayload,
+): Promise<boolean> {
+	try {
+		const response = await client.upsertTasks([payload]);
+		const outcome = await taskMutationOutcome(
+			client,
+			response,
+			[payload],
+			args.verify === true,
+		);
+		return printTaskMutation(
+			command,
+			args.json === true,
+			[outcome],
+			response.data.find((record) => record.id === payload.id) ?? null,
+		);
+	} catch (error) {
+		return printTaskMutation(
+			command,
+			args.json === true,
+			[unknownTaskOutcome([payload.id], error)],
+			null,
+		);
+	}
+}
 
 function formatDate(date: Date): string {
 	const year = date.getFullYear();
@@ -70,6 +106,11 @@ export const taskUpdateCommand = defineCommand({
 		description: "Update basic fields for an Akiflow task",
 	},
 	args: {
+		verify: verifyFlag,
+		json: {
+			type: "boolean",
+			description: "Output mutation receipt envelope as JSON",
+		},
 		id: {
 			type: "positional",
 			description: "Task ID, short ID, or unique ID prefix",
@@ -98,10 +139,6 @@ export const taskUpdateCommand = defineCommand({
 		priority: {
 			type: "string",
 			description: "Priority 1-3",
-		},
-		json: {
-			type: "boolean",
-			description: "Output updated task as JSON",
 		},
 	},
 	run: async (context) => {
@@ -142,23 +179,12 @@ export const taskUpdateCommand = defineCommand({
 		}
 
 		const client = createClient();
-		const response = await client.upsertTasks([updatePayload]);
-		const updatedTask = response.data[0];
-
-		if (!response.success || !updatedTask) {
-			console.error("Error: Failed to update task");
-			if (response.message) console.error(response.message);
-			process.exit(1);
-		}
-
-		if (args.json === true) {
-			console.log(JSON.stringify(updatedTask, null, 2));
-			return;
-		}
-
-		console.log("✓ Updated task successfully");
-		console.log(`  ID: ${updatedTask.id}`);
-		console.log(`  Title: ${updatedTask.title ?? updatePayload.title ?? ""}`);
+		await submitTaskMutation(
+			client,
+			"task update",
+			context.args,
+			updatePayload,
+		);
 	},
 });
 
@@ -168,6 +194,11 @@ export const taskPlanCommand = defineCommand({
 		description: "Schedule task for a specific date",
 	},
 	args: {
+		verify: verifyFlag,
+		json: {
+			type: "boolean",
+			description: "Output mutation receipt envelope as JSON",
+		},
 		id: {
 			type: "positional",
 			description: "Task ID (short ID or UUID)",
@@ -246,27 +277,7 @@ export const taskPlanCommand = defineCommand({
 			updatePayload.datetime_tz = getLocalTimezone();
 		}
 
-		try {
-			const response = await client.upsertTasks([updatePayload]);
-
-			if (response.success) {
-				if (atArg) {
-					console.log(`✓ Scheduled task "${id}" for ${dateStr} at ${atArg}`);
-				} else {
-					console.log(`✓ Scheduled task "${id}" for ${dateStr}`);
-				}
-			} else {
-				console.error("Error: Failed to schedule task");
-				console.error(response.message);
-				process.exit(1);
-			}
-		} catch (error) {
-			console.error("Error: Failed to schedule task");
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
-			process.exit(1);
-		}
+		await submitTaskMutation(client, "task plan", context.args, updatePayload);
 	},
 });
 
@@ -276,6 +287,11 @@ export const taskSnoozeCommand = defineCommand({
 		description: "Push task back by a duration (e.g., 1h, 2d, 1w)",
 	},
 	args: {
+		verify: verifyFlag,
+		json: {
+			type: "boolean",
+			description: "Output mutation receipt envelope as JSON",
+		},
 		id: {
 			type: "positional",
 			description: "Task ID (short ID or UUID)",
@@ -330,23 +346,12 @@ export const taskSnoozeCommand = defineCommand({
 			global_updated_at: timestamp,
 		};
 
-		try {
-			const response = await client.upsertTasks([updatePayload]);
-
-			if (response.success) {
-				console.log(`✓ Snoozed task "${id}" to ${dateStr}`);
-			} else {
-				console.error("Error: Failed to snooze task");
-				console.error(response.message);
-				process.exit(1);
-			}
-		} catch (error) {
-			console.error("Error: Failed to snooze task");
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
-			process.exit(1);
-		}
+		await submitTaskMutation(
+			client,
+			"task snooze",
+			context.args,
+			updatePayload,
+		);
 	},
 });
 
@@ -356,6 +361,11 @@ export const taskDeleteCommand = defineCommand({
 		description: "Soft delete a task",
 	},
 	args: {
+		verify: verifyFlag,
+		json: {
+			type: "boolean",
+			description: "Output mutation receipt envelope as JSON",
+		},
 		id: {
 			type: "positional",
 			description: "Task ID (short ID or UUID)",
@@ -375,24 +385,13 @@ export const taskDeleteCommand = defineCommand({
 			global_updated_at: timestamp,
 		};
 
-		try {
-			const response = await client.upsertTasks([updatePayload]);
-
-			if (response.success) {
-				await removePendingTask(taskId);
-				console.log(`✓ Deleted task "${id}"`);
-			} else {
-				console.error("Error: Failed to delete task");
-				console.error(response.message);
-				process.exit(1);
-			}
-		} catch (error) {
-			console.error("Error: Failed to delete task");
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
-			process.exit(1);
-		}
+		const ok = await submitTaskMutation(
+			client,
+			"task delete",
+			context.args,
+			updatePayload,
+		);
+		if (ok) await removePendingTask(taskId);
 	},
 });
 

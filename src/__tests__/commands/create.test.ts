@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createEventCommand, createSlotCommand } from "../../commands/create";
 import * as storage from "../../lib/auth/storage";
 import * as cache from "../../lib/cache";
+import { expectReceiptOnlyCommandFailure } from "../helpers/receipt-only-command";
 
 const mockCredentials = {
 	token: "test-jwt-token",
@@ -54,58 +55,14 @@ describe("create command", () => {
 				deleted_at: null,
 			},
 		] as any);
-		fetchSpy
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						success: true,
-						message: null,
-						data: [
-							{
-								id: "slot-123",
-								calendar_id: "cal-123",
-								title: "Planning block",
-								start_time: "2026-06-20T16:00:00.000Z",
-								end_time: "2026-06-20T17:00:00.000Z",
-								start_datetime_tz: "America/Los_Angeles",
-								status: "confirmed",
-								description: "Deep work",
-								content: {},
-								data: {},
-								global_created_at: "2026-06-20T00:00:00.000Z",
-								global_updated_at: "2026-06-20T00:00:00.000Z",
-								deleted_at: null,
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						success: true,
-						message: null,
-						data: [
-							{
-								id: "task-created-1",
-								title: "Draft",
-								time_slot_id: "slot-123",
-								global_created_at: "2026-06-20T00:00:00.000Z",
-								global_updated_at: "2026-06-20T00:00:00.000Z",
-							},
-							{
-								id: "task-created-2",
-								title: "Review",
-								time_slot_id: "slot-123",
-								global_created_at: "2026-06-20T00:00:00.000Z",
-								global_updated_at: "2026-06-20T00:00:00.000Z",
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			);
+		fetchSpy.mockImplementation(
+			async (_url: string | URL | Request, options?: RequestInit) => {
+				const data = JSON.parse(options?.body as string);
+				return new Response(JSON.stringify({ success: true, data }), {
+					status: 200,
+				});
+			},
+		);
 
 		// when
 		await createSlotCommand.run!({
@@ -145,12 +102,12 @@ describe("create command", () => {
 		]);
 		expect(
 			taskPayload.map((t: { time_slot_id: string }) => t.time_slot_id),
-		).toEqual(["slot-123", "slot-123"]);
+		).toEqual([slotPayload[0].id, slotPayload[0].id]);
 		expect(taskPayload.map((t: { duration: number }) => t.duration)).toEqual([
 			1800, 1800,
 		]);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
-			"✓ Akiflow task slot created successfully",
+			expect.stringContaining("Operation accepted"),
 		);
 
 		consoleLogSpy.mockRestore();
@@ -220,19 +177,21 @@ describe("create command", () => {
 		);
 
 		// when
-		await createEventCommand.run!({
-			args: {
-				title: "Standup",
-				date: "2026-06-20",
-				at: "09:00",
-				duration: "45m",
-				description: "Discuss launch",
-				location: "Office",
-				json: false,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			createEventCommand.run!({
+				args: {
+					title: "Standup",
+					date: "2026-06-20",
+					at: "09:00",
+					duration: "45m",
+					description: "Discuss launch",
+					location: "Office",
+					json: false,
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		// then
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -270,14 +229,14 @@ describe("create command", () => {
 		);
 		expect(typeof operations[0].id).toBe("string");
 		expect(typeof operations[0].global_updated_at).toBe("string");
-		expect(consoleLogSpy).toHaveBeenCalledWith(
+		expect(consoleLogSpy).not.toHaveBeenCalledWith(
 			"✓ Akiflow calendar event created successfully",
 		);
 
 		consoleLogSpy.mockRestore();
 	});
 
-	it("uses an explicit calendar title and prints JSON output", async () => {
+	it("uses an explicit calendar title without fabricating JSON output", async () => {
 		// given
 		const consoleLogSpy = spyOn(console, "log");
 		readResourceSpy.mockResolvedValue([
@@ -322,31 +281,29 @@ describe("create command", () => {
 		);
 
 		// when
-		await createEventCommand.run!({
-			args: {
-				title: "Demo",
-				date: "2026-06-20",
-				at: "10:00",
-				duration: "30m",
-				calendar: "Explicit",
-				json: true,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			createEventCommand.run!({
+				args: {
+					title: "Demo",
+					date: "2026-06-20",
+					at: "10:00",
+					duration: "30m",
+					calendar: "Explicit",
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		// then
 		const operations = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
 		expect(operations[0].calendar_id).toBe("cal-explicit");
 		expect(operations[0].account_id).toBe("akiflow-account-2");
-		const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] as string);
-		expect(output).toEqual(
-			expect.objectContaining({
-				title: "Demo",
-				calendar_id: "cal-explicit",
-				creator_id: "explicit@example.com",
-			}),
-		);
+		expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+		const envelope = JSON.parse(String(consoleLogSpy.mock.calls[0]?.[0]));
+		expect(envelope.status).toBe("unknown");
+		expect(envelope.result).toBeNull();
 
 		consoleLogSpy.mockRestore();
 	});
@@ -384,18 +341,20 @@ describe("create command", () => {
 		);
 
 		// when
-		await createEventCommand.run!({
-			args: {
-				title: "Rental pickup",
-				date: "2026-06-20",
-				at: "09:00",
-				duration: "30m",
-				"description-file": descriptionPath,
-				json: false,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			createEventCommand.run!({
+				args: {
+					title: "Rental pickup",
+					date: "2026-06-20",
+					at: "09:00",
+					duration: "30m",
+					"description-file": descriptionPath,
+					json: false,
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		// then
 		const operations = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);

@@ -66,17 +66,10 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const updatedEvent = JSON.parse(result.stdout);
-		expect(updatedEvent.id).toBe("event-meeting-1");
-		expect(updatedEvent.start_time).toBe(expectedStart);
-		expect(updatedEvent.end_time).toBe(expectedEnd);
-		expect(updatedEvent.content).toEqual({
-			location: "Room 12",
-			sendUpdates: "all",
-		});
-		expect(updatedEvent.attendees).toEqual([
-			{ email: "pat@example.com", name: "Pat", response: "accepted" },
-		]);
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.receipts[0].event_id).toBe("event-meeting-1");
+		expect(envelope.receipts[0].kind).toBe("patch");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
@@ -102,10 +95,10 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const deletedEvent = JSON.parse(result.stdout);
-		expect(deletedEvent.id).toBe("event-meeting-1");
-		expect(deletedEvent.status).toBe("cancelled");
-		expect(deletedEvent.deleted_at).toEqual(expect.any(String));
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.receipts[0].event_id).toBe("event-meeting-1");
+		expect(envelope.receipts[0].kind).toBe("delete");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
@@ -143,18 +136,10 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const modifier = JSON.parse(result.stdout);
-		expect(modifier.event_id).toBe("event-meeting-1");
-		expect(modifier.action).toBe("attendees/updateList");
-		expect(modifier.content).toEqual({
-			attendeeEmailsToAdd: ["julia@example.com", "alex@example.com"],
-			attendeeEmailsToRemove: [],
-			attendeeResponseStatusesByEmail: {
-				"julia@example.com": "needsAction",
-				"alex@example.com": "needsAction",
-			},
-			sendUpdates: "all",
-		});
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.schema_version).toBe(1);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.receipts[0].event_id).toBe("event-meeting-1");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v3/events/modifiers",
@@ -185,7 +170,7 @@ describe("af event (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual(
+		expect(JSON.parse(result.stdout).result).toEqual(
 			expect.objectContaining({
 				event_id: "event-meeting-1",
 				action: "add",

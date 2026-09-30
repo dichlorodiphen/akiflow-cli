@@ -120,7 +120,7 @@ describe("af slot (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const output = JSON.parse(result.stdout);
+		const output = JSON.parse(result.stdout).result;
 		expect(output.slot).toMatchObject({
 			id: "slot-focus-1",
 			title: "Updated fixture slot",
@@ -179,7 +179,7 @@ describe("af slot (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const deletedSlot = JSON.parse(result.stdout);
+		const deletedSlot = JSON.parse(result.stdout).result;
 		expect(deletedSlot).toEqual({
 			id: "slot-focus-1",
 			deleted_at: expect.any(String),

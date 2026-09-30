@@ -1,12 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import { checkTaskMutationResult } from "../lib/api/task-results";
 import type {
 	CreateEventPayload,
 	Event,
 	EventModifierPayload,
 } from "../lib/api/types";
-import { readResource, refreshResource, upsertResourceRecords } from "../lib/cache";
+import { isReadOnlyCanonical } from "../lib/api/types";
+import { verifyEventAttendees } from "../lib/attendee-verification";
+import {
+	readResource,
+	refreshResource,
+	upsertResourceRecords,
+} from "../lib/cache";
 import {
 	createDateTimeUTC,
 	getLocalTimezone,
@@ -14,6 +21,13 @@ import {
 	parseTime,
 } from "../lib/date-parser";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import {
+	type VerificationResult,
+	verifyEventDeleted,
+	verifyEventFields,
+} from "../lib/verification";
+import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 import { createEventCommand } from "./create";
 
 type MutableEvent = Record<string, unknown>;
@@ -91,7 +105,7 @@ export function resolveCachedEvent(events: Event[], identifier: string): Event {
 export function validateMutableTimedGoogleEvent(event: Event): void {
 	if (event.deleted_at) fail(`Event "${event.id}" is deleted`);
 	if (event.hidden) fail(`Event "${event.id}" is hidden`);
-	if (event.read_only) fail(`Event "${event.id}" is read-only`);
+	if (isReadOnlyCanonical(event)) fail(`Event "${event.id}" is read-only`);
 	if (event.connector_id !== "google") {
 		fail(
 			`af event supports Google calendar events only in v1. Event "${event.id}" uses connector "${event.connector_id}".`,
@@ -333,16 +347,6 @@ export function buildAttendeeModifierPayload({
 	};
 }
 
-function formatLocalTime(instant: string): string {
-	return new Date(instant).toLocaleString([], {
-		year: "numeric",
-		month: "2-digit",
-		day: "2-digit",
-		hour: "2-digit",
-		minute: "2-digit",
-	});
-}
-
 export const eventUpdateCommand = defineCommand({
 	meta: {
 		name: "update",
@@ -357,18 +361,15 @@ export const eventUpdateCommand = defineCommand({
 		date: {
 			type: "string",
 			description: "Event date (YYYY-MM-DD or natural language)",
-			required: true,
 			alias: "d",
 		},
 		at: {
 			type: "string",
 			description: "Local start time (e.g., '09:30')",
-			required: true,
 		},
 		duration: {
 			type: "string",
 			description: "Event duration (e.g., '30m', '1h')",
-			required: true,
 		},
 		title: {
 			type: "string",
@@ -386,9 +387,10 @@ export const eventUpdateCommand = defineCommand({
 			type: "string",
 			description: "New event location; pass an empty value to clear",
 		},
+		verify: verifyFlag,
 		json: {
 			type: "boolean",
-			description: "Output updated event as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -402,16 +404,32 @@ export const eventUpdateCommand = defineCommand({
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
 
-		const date = resolveDateInput(args.date as string | undefined);
-		const startTime = resolveTimeInput(date, args.at as string | undefined);
-		let durationSeconds: number;
-		try {
-			durationSeconds = parseDurationToSeconds(args.duration as string);
-		} catch (error) {
-			fail(error instanceof Error ? error.message : String(error));
+		const observedStart = new Date(event.start_time as string);
+		const observedDate = `${observedStart.getFullYear()}-${String(observedStart.getMonth() + 1).padStart(2, "0")}-${String(observedStart.getDate()).padStart(2, "0")}`;
+		const date = args.date
+			? resolveDateInput(args.date as string)
+			: observedDate;
+		const observedTime = `${String(observedStart.getHours()).padStart(2, "0")}:${String(observedStart.getMinutes()).padStart(2, "0")}`;
+		const startTime =
+			args.date || args.at
+				? resolveTimeInput(
+						date,
+						(args.at as string | undefined) ?? observedTime,
+					)
+				: (event.start_time as string);
+		let durationSeconds =
+			(Date.parse(event.end_time as string) -
+				Date.parse(event.start_time as string)) /
+			1000;
+		if (args.duration) {
+			try {
+				durationSeconds = parseDurationToSeconds(args.duration as string);
+			} catch (error) {
+				fail(error instanceof Error ? error.message : String(error));
+			}
 		}
 		const endTime = new Date(
-			new Date(startTime).getTime() + durationSeconds * 1000,
+			Date.parse(startTime) + durationSeconds * 1000,
 		).toISOString();
 		const description = await resolveDescription(
 			args.description as string | undefined,
@@ -425,29 +443,70 @@ export const eventUpdateCommand = defineCommand({
 			location: args.location as string | undefined,
 			startTime,
 			endTime,
+			timezone:
+				args.date || args.at
+					? getLocalTimezone()
+					: (event.start_datetime_tz ?? getLocalTimezone()),
 		});
 
+		if (!args.date && !args.at && event.end_datetime_tz !== undefined) {
+			payload.end_datetime_tz = event.end_datetime_tz;
+		}
+
 		const response = await client.createEvents([payload]);
-		const updatedEvent = response.data[0];
-		if (!updatedEvent) fail("Failed to update event - no data returned");
-
-		// Write-through: cache the server's returned state so a follow-up
-		// update builds its operation base from the just-applied change, even
-		// when the sync endpoint has not caught up with the write endpoint.
-		if (updatedEvent.id && updatedEvent.start_time) {
-			await upsertResourceRecords("events", [updatedEvent]);
+		const receipt = response.receipts[0];
+		const verifications = new Map<string, VerificationResult<Event>>();
+		if (receipt?.status === "accepted" && args.verify === true) {
+			const verification = await verifyEventFields(
+				client,
+				event.id,
+				eventExpectedFields(payload),
+				verificationOptions(),
+			);
+			if (isReadOnlyCanonical(verification.observed)) {
+				verification.status = "mismatch";
+				verification.differingFields = [
+					...verification.differingFields,
+					"read_only",
+				];
+				verification.error = `Event "${event.id}" is read-only; further mutations are refused`;
+			}
+			verifications.set(event.id, verification);
+			if (
+				verification.observed &&
+				(verification.status === "verified" ||
+					isReadOnlyCanonical(verification.observed))
+			) {
+				await upsertResourceRecords("events", [verification.observed]);
+			}
+		} else if (
+			receipt?.status === "accepted" &&
+			receipt.result &&
+			typeof receipt.result === "object"
+		) {
+			// Only accepted server-returned fields can be merged onto the observed
+			// base. Submitted desired fields are never cached as confirmation.
+			const returned = receipt.result as Partial<Event>;
+			if (returned.id === event.id) {
+				await upsertResourceRecords("events", [
+					{
+						...event,
+						...returned,
+						...(isReadOnlyCanonical(event) ? { read_only: true } : {}),
+					},
+				]);
+			}
 		}
-
-		if (args.json === true) {
-			console.log(JSON.stringify(updatedEvent, null, 2));
-			return;
-		}
-
-		console.log("✓ Akiflow calendar event updated successfully");
-		console.log(`  ID: ${updatedEvent.id}`);
-		console.log(`  Title: ${updatedEvent.title ?? payload.title}`);
-		console.log(`  Calendar: ${updatedEvent.calendar_id ?? event.calendar_id}`);
-		console.log(`  Time: ${formatLocalTime(startTime)} (${args.duration})`);
+		outputMutation({
+			command: "event update",
+			json: args.json === true,
+			receipts: response.receipts,
+			verifications,
+			result:
+				verifications.get(event.id)?.status === "verified"
+					? verifications.get(event.id)?.observed
+					: null,
+		});
 	},
 });
 
@@ -467,9 +526,10 @@ export const eventDeleteCommand = defineCommand({
 			description: "Google attendee notification mode: all or none",
 			default: "all",
 		},
+		verify: verifyFlag,
 		json: {
 			type: "boolean",
-			description: "Output deleted event as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -480,24 +540,48 @@ export const eventDeleteCommand = defineCommand({
 			fail(`Invalid --notify "${notify}". Expected "all" or "none".`);
 		}
 
+		await refreshResource(client, "events");
 		const events = await readResource(client, "events");
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
 
 		const payload = buildEventDeletePayload({ event, notify });
 		const response = await client.createEvents([payload]);
-		const deletedEvent = response.data[0];
-		if (!deletedEvent) fail("Failed to delete event - no data returned");
-
-		if (args.json === true) {
-			console.log(JSON.stringify(deletedEvent, null, 2));
-			return;
+		const receipt = response.receipts[0];
+		const verifications = new Map<string, VerificationResult<Event>>();
+		if (receipt?.status === "accepted" && args.verify === true) {
+			const verification = await verifyEventDeleted(
+				client,
+				event.id,
+				verificationOptions(),
+			);
+			if (isReadOnlyCanonical(verification.observed)) {
+				verification.status = "mismatch";
+				verification.differingFields = [
+					...verification.differingFields,
+					"read_only",
+				];
+				verification.error = `Event "${event.id}" is read-only; further mutations are refused`;
+			}
+			verifications.set(event.id, verification);
+			if (
+				verification.observed &&
+				(verification.status === "verified" ||
+					isReadOnlyCanonical(verification.observed))
+			) {
+				await upsertResourceRecords("events", [verification.observed]);
+			}
 		}
-
-		console.log("✓ Akiflow calendar event deleted successfully");
-		console.log(`  ID: ${deletedEvent.id}`);
-		console.log(`  Title: ${deletedEvent.title ?? event.title ?? ""}`);
-		console.log(`  Notify: ${notify}`);
+		outputMutation({
+			command: "event delete",
+			json: args.json === true,
+			receipts: response.receipts,
+			verifications,
+			result:
+				verifications.get(event.id)?.status === "verified"
+					? verifications.get(event.id)?.observed
+					: null,
+		});
 	},
 });
 
@@ -506,6 +590,7 @@ async function runAttendeeCommand(
 	mode: "add" | "remove",
 ): Promise<void> {
 	const client = createClient();
+	await refreshResource(client, "events");
 	const events = await readResource(client, "events");
 	const event = resolveCachedEvent(events, args.id as string);
 	validateMutableTimedGoogleEvent(event);
@@ -523,19 +608,21 @@ async function runAttendeeCommand(
 				? "No attendees to add; all requested emails are already present."
 				: "No attendees to remove; none of the requested emails are present.";
 		if (args.json === true) {
-			console.log(
-				JSON.stringify(
-					{
-						event_id: event.id,
-						action: mode,
-						requested: requested.length,
-						changed: 0,
-						message,
-					},
-					null,
-					2,
-				),
-			);
+			outputMutation({
+				command: `event attendees ${mode}`,
+				json: true,
+				receipts: [],
+				result: {
+					event_id: event.id,
+					action: mode,
+					requested: requested.length,
+					changed: 0,
+					message,
+				},
+				warnings: [
+					"No mutation submitted; attendee membership was observed during refresh.",
+				],
+			});
 			return;
 		}
 		console.log(message);
@@ -547,22 +634,94 @@ async function runAttendeeCommand(
 		add: mode === "add" ? toChange : [],
 		remove: mode === "remove" ? toChange : [],
 	});
-	const response = await client.createEventModifiers([payload]);
-	const modifier = response.data[0];
-	if (!modifier) fail("Failed to update attendees - no data returned");
-
-	if (args.json === true) {
-		console.log(JSON.stringify(modifier, null, 2));
-		return;
+	let receipts: import("../lib/api/types").MutationReceipt[];
+	try {
+		const response = await client.createEventModifiers([payload]);
+		const checked = checkTaskMutationResult(response, [payload.id]);
+		const modifier = response.data?.find(
+			(record) => record.id === payload.id,
+		) as (EventModifierPayload & { status?: string | null }) | undefined;
+		const status =
+			checked.failedIds.includes(payload.id) ||
+			modifier?.failed_at != null ||
+			modifier?.status === "failed"
+				? "failed"
+				: !checked.ok
+					? "unknown"
+					: modifier?.status === "pending" && modifier.processed_at == null
+						? "pending"
+						: modifier?.status == null || modifier.status === "succeeded"
+							? "accepted"
+							: "unknown";
+		receipts = [
+			{
+				operation_id: payload.id,
+				event_id: event.id,
+				kind: "patch",
+				status,
+				failed_at: modifier?.failed_at ?? null,
+				processed_at: modifier?.processed_at ?? null,
+				result: modifier?.result ?? null,
+				...(checked.errors.length > 0
+					? { error: checked.errors.join("; ") }
+					: status === "failed"
+						? {
+								error: modifier?.result ?? "Server rejected attendee operation",
+							}
+						: status === "unknown"
+							? {
+									error: `Unrecognized attendee operation status: ${modifier?.status ?? "missing"}`,
+								}
+							: {}),
+			},
+		];
+	} catch (error) {
+		receipts = [
+			{
+				operation_id: payload.id,
+				event_id: event.id,
+				kind: "patch",
+				status: "unknown",
+				failed_at: null,
+				processed_at: null,
+				result: null,
+				error: error instanceof Error ? error.message : String(error),
+			},
+		];
 	}
-
-	console.log(
-		`✓ Akiflow calendar event attendee${toChange.length === 1 ? "" : "s"} ${mode === "add" ? "added" : "removed"} successfully`,
-	);
-	console.log(`  Event: ${event.id}`);
-	console.log(
-		`  ${mode === "add" ? "Added" : "Removed"}: ${toChange.join(", ")}`,
-	);
+	const verifications = new Map<string, VerificationResult<Event>>();
+	if (args.verify === true && receipts[0]?.status === "accepted") {
+		const verification = await verifyEventAttendees(
+			client,
+			event.id,
+			mode === "add" ? requested : [],
+			mode === "remove" ? requested : [],
+			verificationOptions(),
+		);
+		if (
+			verification.observed &&
+			(verification.status === "verified" ||
+				isReadOnlyCanonical(verification.observed))
+		) {
+			await upsertResourceRecords("events", [verification.observed]);
+		}
+		if (isReadOnlyCanonical(verification.observed)) {
+			verification.status = "mismatch";
+			verification.differingFields.push("read_only");
+			verification.error = `Event "${event.id}" is read-only; further mutations are refused`;
+		}
+		verifications.set(event.id, verification);
+	}
+	outputMutation({
+		command: `event attendees ${mode}`,
+		json: args.json === true,
+		receipts,
+		verifications,
+		result:
+			verifications.get(event.id)?.status === "verified"
+				? verifications.get(event.id)?.observed
+				: null,
+	});
 }
 
 export const attendeeAddCommand = defineCommand({
@@ -581,9 +740,10 @@ export const attendeeAddCommand = defineCommand({
 			description: "Attendee email; additional emails may follow",
 			required: true,
 		},
+		verify: verifyFlag,
 		json: {
 			type: "boolean",
-			description: "Output modifier as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {
@@ -607,9 +767,10 @@ export const attendeeRemoveCommand = defineCommand({
 			description: "Attendee email; additional emails may follow",
 			required: true,
 		},
+		verify: verifyFlag,
 		json: {
 			type: "boolean",
-			description: "Output modifier as JSON",
+			description: "Output versioned mutation receipts as JSON",
 		},
 	},
 	run: async (context) => {

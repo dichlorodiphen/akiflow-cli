@@ -68,12 +68,14 @@ describe("af batch (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const report = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		const report = envelope.result ?? envelope;
 		expect(report).toMatchObject({
 			mode: "execute",
 			operation: "events.attendees.add",
 			selected: 1,
-			changed: 1,
+			changed: 0,
+			accepted: 1,
 			noop: 0,
 			skipped: 0,
 			failed: 0,
@@ -119,7 +121,8 @@ describe("af batch (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const report = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		const report = envelope.result ?? envelope;
 		expect(report).toMatchObject({
 			mode: "dry-run",
 			operation: "events.attendees.remove",
@@ -157,12 +160,14 @@ describe("af batch (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const report = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		const report = envelope.result ?? envelope;
 		expect(report).toMatchObject({
 			mode: "execute",
 			operation: "events.delete",
 			selected: 1,
-			changed: 1,
+			changed: 0,
+			accepted: 1,
 		});
 
 		const request = server.requests.find(
@@ -201,12 +206,14 @@ describe("af batch (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const report = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		const report = envelope.result ?? envelope;
 		expect(report).toMatchObject({
 			mode: "execute",
 			operation: "slots.delete",
 			selected: 1,
-			changed: 1,
+			changed: 0,
+			accepted: 1,
 		});
 
 		const request = server.requests.find(
@@ -252,13 +259,15 @@ describe("af batch (BDD)", () => {
 		);
 
 		expect(result.exitCode).not.toBe(0);
-		const report = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		const report = envelope.result ?? envelope;
 		expect(report).toMatchObject({
 			mode: "execute",
 			operation: "events.attendees.add",
 			selected: 1,
 			changed: 0,
-			failed: 1,
+			failed: 0,
+			unknown: 1,
 		});
 	});
 });

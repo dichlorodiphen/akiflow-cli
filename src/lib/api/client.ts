@@ -1,16 +1,17 @@
 import { loadCredentials, saveCredentials } from "../auth/storage";
+import { parseEventMutationResult } from "./mutation-results";
 import type {
 	AkiflowCredentials,
 	ApiResponse,
 	CreateEventPayload,
 	CreateTaskPayload,
 	CreateTimeSlotPayload,
-	Event,
 	EventModifier,
 	EventModifierPayload,
 	EventOperation,
 	EventOperationPayload,
 	Label,
+	MutationResult,
 	Tag,
 	Task,
 	TimeSlot,
@@ -423,34 +424,29 @@ export class AkiflowClient {
 		return this.request<TimeSlot[]>("PATCH", "/v5/time_slots", timeSlots);
 	}
 
-	async createEvents(
-		events: CreateEventPayload[],
-	): Promise<ApiResponse<Event[]>> {
+	async createEvents(events: CreateEventPayload[]): Promise<MutationResult> {
 		const operations = events.map((event, index) =>
 			eventOperationFromLegacyPayload(event, index),
 		);
-		const response = await this.request<EventOperation[]>(
-			"POST",
-			"/v5/event_operations",
-			operations,
-		);
-		const failedIds = new Set(
-			(response.failed ?? [])
-				.map((failure) => failure.id)
-				.filter((id): id is string => typeof id === "string"),
-		);
-		const acceptedEvents = events.filter(
-			(_event, index) => !failedIds.has(operations[index]?.id ?? ""),
-		);
-
-		return {
-			...response,
-			success:
-				response.success &&
-				acceptedEvents.length === events.length &&
-				failedIds.size === 0,
-			data: acceptedEvents as unknown as Event[],
-		};
+		try {
+			const response = await this.request<EventOperation[]>(
+				"POST",
+				"/v5/event_operations",
+				operations,
+			);
+			return parseEventMutationResult(response, operations);
+		} catch (error) {
+			// A failed transport may follow an applied write. Preserve operation IDs
+			// and surface unknown receipts; never submit a second operation.
+			return parseEventMutationResult(
+				{
+					success: false,
+					data: [],
+					message: error instanceof Error ? error.message : String(error),
+				},
+				operations,
+			);
+		}
 	}
 
 	async createEventModifiers(

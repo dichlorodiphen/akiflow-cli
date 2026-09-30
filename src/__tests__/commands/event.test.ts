@@ -16,6 +16,7 @@ import {
 import type { Event } from "../../lib/api/types";
 import * as storage from "../../lib/auth/storage";
 import * as cache from "../../lib/cache";
+import { expectReceiptOnlyCommandFailure } from "../helpers/receipt-only-command";
 
 const mockCredentials = {
 	token: "test-jwt-token",
@@ -114,6 +115,7 @@ describe("event command", () => {
 	});
 
 	afterEach(() => {
+		process.exitCode = 0;
 		fetchSpy.mockRestore();
 		loadCredentialsSpy.mockRestore();
 		readResourceSpy.mockRestore();
@@ -195,20 +197,22 @@ describe("event command", () => {
 			),
 		);
 
-		await eventUpdateCommand.run!({
-			args: {
-				id: "event-123",
-				date: "2026-06-20",
-				at: "10:00",
-				duration: "45m",
-				title: "Updated flight",
-				description: "Gate changed",
-				location: "PDX",
-				json: false,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			eventUpdateCommand.run!({
+				args: {
+					id: "event-123",
+					date: "2026-06-20",
+					at: "10:00",
+					duration: "45m",
+					title: "Updated flight",
+					description: "Gate changed",
+					location: "PDX",
+					json: false,
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
@@ -232,31 +236,21 @@ describe("event command", () => {
 				},
 			}),
 		);
-		expect(consoleLogSpy).toHaveBeenCalledWith(
+		expect(consoleLogSpy).not.toHaveBeenCalledWith(
 			"✓ Akiflow calendar event updated successfully",
 		);
 
-		// The update refreshes events before building the payload so the
-		// operation base reflects the latest server state, and writes the
-		// server's response back to the cache so a follow-up update chains
-		// correctly.
+		// Fresh bases are still required; unmatched results cannot enter the cache.
 		expect(refreshResourceSpy).toHaveBeenCalledWith(
 			expect.anything(),
 			"events",
 		);
-		expect(upsertResourceRecordsSpy).toHaveBeenCalledWith("events", [
-			expect.objectContaining({
-				id: "event-123456",
-				title: "Updated flight",
-				start_time: expectedStart,
-				end_time: expectedEnd,
-			}),
-		]);
+		expect(upsertResourceRecordsSpy).not.toHaveBeenCalled();
 
 		consoleLogSpy.mockRestore();
 	});
 
-	it("builds the second of back-to-back updates from the first update's state", async () => {
+	it("builds the second operation from freshly observed state despite receipt-only responses", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const firstStart = new Date(2026, 5, 20, 10, 0).toISOString();
 		const firstEnd = new Date(2026, 5, 20, 10, 45).toISOString();
@@ -269,7 +263,7 @@ describe("event command", () => {
 			start_time: firstStart,
 			end_time: firstEnd,
 		};
-		// Simulate write-through: the second read sees the first update's state.
+		// Simulate a fresh canonical read, independent of the mutation response.
 		readResourceSpy.mockResolvedValueOnce([event()]);
 		readResourceSpy.mockResolvedValueOnce([firstResponse]);
 
@@ -305,8 +299,12 @@ describe("event command", () => {
 				rawArgs: [],
 			} as any);
 
-		await runUpdate("10:00", "First update");
-		await runUpdate("11:00", "Second update");
+		await expectReceiptOnlyCommandFailure(() =>
+			runUpdate("10:00", "First update"),
+		);
+		await expectReceiptOnlyCommandFailure(() =>
+			runUpdate("11:00", "Second update"),
+		);
 
 		expect(fetchSpy).toHaveBeenCalledTimes(2);
 		const secondBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string);
@@ -344,13 +342,15 @@ describe("event command", () => {
 			),
 		);
 
-		await eventDeleteCommand.run!({
-			args: {
-				id: "event-123",
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			eventDeleteCommand.run!({
+				args: {
+					id: "event-123",
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(fetchSpy.mock.calls[0]?.[0]).toBe(
@@ -365,14 +365,14 @@ describe("event command", () => {
 				global_updated_at: expect.any(String),
 			}),
 		);
-		expect(consoleLogSpy).toHaveBeenCalledWith(
+		expect(consoleLogSpy).not.toHaveBeenCalledWith(
 			"✓ Akiflow calendar event deleted successfully",
 		);
 
 		consoleLogSpy.mockRestore();
 	});
 
-	it("supports silent event delete and JSON output", async () => {
+	it("sends silent event delete without fabricating JSON output", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		fetchSpy.mockResolvedValueOnce(
 			new Response(
@@ -385,25 +385,24 @@ describe("event command", () => {
 			),
 		);
 
-		await eventDeleteCommand.run!({
-			args: {
-				id: "event-123456",
-				notify: "none",
-				json: true,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			eventDeleteCommand.run!({
+				args: {
+					id: "event-123456",
+					notify: "none",
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		const operations = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
 		expect(operations[0].payload.send_updates).toBe(false);
-		const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] as string);
-		expect(output).toEqual(
-			expect.objectContaining({
-				id: "event-123456",
-				status: "cancelled",
-			}),
-		);
+		expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+		const envelope = JSON.parse(String(consoleLogSpy.mock.calls[0]?.[0]));
+		expect(envelope.status).toBe("unknown");
+		expect(envelope.result).toBeNull();
 
 		consoleLogSpy.mockRestore();
 	});
@@ -424,18 +423,20 @@ describe("event command", () => {
 			),
 		);
 
-		await eventUpdateCommand.run!({
-			args: {
-				id: "event-123456",
-				date: "2026-06-20",
-				at: "10:00",
-				duration: "30m",
-				"description-file": descriptionPath,
-				json: true,
-				_: [],
-			},
-			rawArgs: [],
-		} as any);
+		await expectReceiptOnlyCommandFailure(() =>
+			eventUpdateCommand.run!({
+				args: {
+					id: "event-123456",
+					date: "2026-06-20",
+					at: "10:00",
+					duration: "30m",
+					"description-file": descriptionPath,
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any),
+		);
 
 		const operations = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
 		expect(operations[0].payload.changes.description).toBe(
@@ -575,8 +576,91 @@ describe("event command", () => {
 			},
 			sendUpdates: "all",
 		});
-		expect(consoleLogSpy.mock.calls.join("\n")).toContain("julia@example.com");
+		expect(consoleLogSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBe(1);
+		process.exitCode = 0;
 
+		consoleLogSpy.mockRestore();
+	});
+
+	it("never accepts aggregate-failed modifiers and preserves pending/failed status", async () => {
+		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
+		const cases = [
+			{ success: false, status: "succeeded", expected: "unknown" },
+			{ success: true, status: "pending", expected: "pending" },
+			{ success: true, status: "failed", expected: "failed" },
+		];
+		for (const testCase of cases) {
+			fetchSpy.mockImplementationOnce(
+				async (_url: unknown, init?: RequestInit) => {
+					const payloads = JSON.parse(String(init?.body));
+					return new Response(
+						JSON.stringify({
+							success: testCase.success,
+							message: "server detail",
+							data: [
+								{
+									...payloads[0],
+									status: testCase.status,
+									result: "server rejected",
+								},
+							],
+						}),
+					);
+				},
+			);
+			await attendeeAddCommand.run!({
+				args: { id: "event-123456", email: "new@example.com", json: true },
+				rawArgs: [],
+			} as any);
+			const output = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0]));
+			expect(output.status).toBe(testCase.expected);
+			expect(output.receipts[0].status).toBe(testCase.expected);
+			expect(process.exitCode).toBe(1);
+			process.exitCode = 0;
+		}
+		consoleLogSpy.mockRestore();
+	});
+
+	it("verifies single attendee membership with an uncached fresh read", async () => {
+		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
+		fetchSpy.mockImplementationOnce(
+			async (_url: unknown, init?: RequestInit) => {
+				const payloads = JSON.parse(String(init?.body));
+				return new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ ...payloads[0], status: "succeeded" }],
+					}),
+				);
+			},
+		);
+		fetchSpy.mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					success: true,
+					message: null,
+					data: [{ ...event(), attendees: [{ email: "new@example.com" }] }],
+				}),
+			),
+		);
+		await attendeeAddCommand.run!({
+			args: {
+				id: "event-123456",
+				email: "new@example.com",
+				verify: true,
+				json: true,
+			},
+			rawArgs: [],
+		} as any);
+		const output = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0]));
+		expect(output.status).toBe("verified");
+		expect(output.result.attendees).toEqual([{ email: "new@example.com" }]);
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		expect(upsertResourceRecordsSpy).toHaveBeenCalledWith("events", [
+			output.result,
+		]);
 		consoleLogSpy.mockRestore();
 	});
 
@@ -594,7 +678,9 @@ describe("event command", () => {
 		} as any);
 
 		expect(fetchSpy).not.toHaveBeenCalled();
-		expect(JSON.parse(consoleLogSpy.mock.calls[0]?.[0] as string)).toEqual(
+		expect(
+			JSON.parse(consoleLogSpy.mock.calls[0]?.[0] as string).result,
+		).toEqual(
 			expect.objectContaining({
 				event_id: "event-123456",
 				action: "add",

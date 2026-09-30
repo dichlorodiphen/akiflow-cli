@@ -4,10 +4,10 @@ Private Bun-native Akiflow CLI with a resource-first command surface.
 
 ## Structure
 
-- `src/index.ts` registers top-level resources: `task`, `event`, `slot`, `convert`, `cal`, `project`, `auth`, `cache`, `doctor`, `refresh`, and `completion`.
+- `src/index.ts` registers top-level resources: `task`, `event`, `slot`, `batch`, `convert`, `cal`, `calendar`, `project`, `auth`, `cache`, `doctor`, `refresh`, and `completion`.
 - `src/commands/task/index.ts` exposes `list`, `create`, `complete`, `update`, `plan`, `snooze`, and `delete`.
-- `src/commands/event.ts` exposes `create`, `update`, and `attendees add|remove`.
-- `src/commands/slot.ts` exposes `create`.
+- `src/commands/event.ts` exposes `create`, `update`, `delete`, and `attendees add|remove`.
+- `src/commands/slot.ts` exposes `list`, `show`, `create`, `update`, and `delete`.
 - `src/commands/create.ts` contains the shared task, event, and slot creation implementations and payload builders.
 - `src/commands/ls.ts` contains the task list implementation used as `af task list`.
 - `src/commands/do.ts` contains the task completion implementation used as `af task complete`.
@@ -51,6 +51,10 @@ Use the resource-first replacements instead: `af task create`, `af task list`, `
 ## Short ID Context
 
 `af task list` saves task context to the cache. Short task IDs and unique ID prefixes depend on that context. Full UUID task IDs work without context.
+
+## Mutation Outcomes
+
+Mutation JSON uses a versioned receipt envelope. `accepted` means submitted, not confirmed. Use `--verify` for bounded fresh field confirmation (default timeout 15s); unknown, failed, pending, mismatch, timeout, and partial results exit non-zero. Never automatically rerun uncertain writes. Conversion source deletion requires every target to pass fresh verification first.
 
 ## Development
 

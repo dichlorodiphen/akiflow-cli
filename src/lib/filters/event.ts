@@ -66,10 +66,7 @@ function recurrenceSlotKey(e: Event): string {
  * the series' first occurrence, so it must be shown; otherwise the first
  * meeting of every recurring series silently disappears from the calendar.
  */
-function isUncoveredSeriesMaster(
-	e: Event,
-	coveredSlots: Set<string>,
-): boolean {
+function isUncoveredSeriesMaster(e: Event, coveredSlots: Set<string>): boolean {
 	if (!e.hidden) return false;
 	const rid = e.recurring_id;
 	if (!rid || rid !== e.id) return false;

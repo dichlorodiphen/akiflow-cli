@@ -410,6 +410,35 @@ const COMMANDS: Record<string, CommandNode> = {
 	completion: { description: "Generate shell completion scripts" },
 };
 
+// Keep confirmation flags aligned with the mutation command surface.
+for (const path of [
+	["task", "create"],
+	["task", "complete"],
+	["task", "update"],
+	["task", "plan"],
+	["task", "snooze"],
+	["task", "delete"],
+	["event", "create"],
+	["event", "update"],
+	["event", "delete"],
+	["event", "attendees", "add"],
+	["event", "attendees", "remove"],
+	["slot", "create"],
+	["convert", "tasks"],
+	["batch", "events", "delete"],
+	["batch", "events", "attendees", "add"],
+	["batch", "events", "attendees", "remove"],
+]) {
+	let node: CommandNode | undefined;
+	let children: Record<string, CommandNode> | undefined = COMMANDS;
+	for (const segment of path) {
+		node = children?.[segment];
+		children = node?.subcommands;
+	}
+	if (node)
+		node.flags = [...new Set([...(node.flags ?? []), "--verify", "--json"])];
+}
+
 function subcommandNames(node: CommandNode | undefined): string[] {
 	return Object.keys(node?.subcommands ?? {});
 }
@@ -482,33 +511,38 @@ function zshCommandEntries(commands: Record<string, CommandNode>): string {
 }
 
 function generateZshCompletion(): string {
-	const main = zshCommandEntries(COMMANDS);
-	const cases = Object.entries(COMMANDS)
-		.map(([name, node]) => {
-			const subs = node.subcommands ? zshCommandEntries(node.subcommands) : "";
+	const entries = collectCommandPaths(COMMANDS)
+		.sort((a, b) => b.path.length - a.path.length)
+		.map(({ path, node }) => {
+			const condition = path
+				.map((segment, index) => `"$words[${index + 2}]" == "${segment}"`)
+				.join(" && ");
+			const children = node.subcommands
+				? zshCommandEntries(node.subcommands)
+				: "";
 			const flags = (node.flags ?? []).map((flag) => `'${flag}'`).join(" ");
 			return `
-        ${name})
-          ${subs ? `_describe 'subcommand' "(${subs})"` : `_arguments ${flags}`}
-          ;;`;
+  if [[ ${condition} && $CURRENT -gt ${path.length + 1} ]]; then
+    ${
+			children
+				? `local -a subcommands=(${children})
+    _describe 'subcommand' subcommands`
+				: `_arguments ${flags}`
+		}
+    return
+  fi`;
 		})
 		.join("");
-
 	return `#compdef af
 _af() {
   local -a commands=(
-    ${main}
+    ${zshCommandEntries(COMMANDS)}
   )
-  _arguments -C '1: :->command' '*::arg:->args'
-  case $state in
-    command)
-      _describe 'command' commands
-      ;;
-    args)
-      case \${words[2]} in${cases}
-      esac
-      ;;
-  esac
+  if [[ $CURRENT -eq 2 ]]; then
+    _describe 'command' commands
+    return
+  fi
+${entries}
 }
 _af
 `;

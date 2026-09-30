@@ -59,15 +59,11 @@ describe("af event create (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const event = JSON.parse(result.stdout);
-		expect(event.title).toBe("Integration event");
-		expect(event.calendar_id).toBe("cal-personal-1");
-		expect(event.creator_id).toBe("test@example.com");
-		expect(event.origin_calendar_id).toBe("test@example.com");
-		expect(event.content).toEqual({
-			sendUpdates: "all",
-			location: "Test office",
-		});
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.schema_version).toBe(1);
+		expect(envelope.status).toBe("accepted");
+		expect(envelope.result).toBeNull();
+		expect(envelope.receipts[0].kind).toBe("create");
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { eventLifecycle } from "./helpers/event-lifecycle";
 import { FakeAkiflowServer } from "./helpers/fake-server";
 import { loadAllFixtures } from "./helpers/load-fixtures";
 import { spawnCli } from "./helpers/spawn-cli";
@@ -90,6 +91,8 @@ beforeEach(async () => {
 			data: payload,
 		};
 	});
+	const lifecycle = eventLifecycle(server);
+	lifecycle.records.length = 0;
 	env = makeTestEnv(server.url);
 });
 
@@ -126,7 +129,9 @@ describe("af convert tasks --to events (BDD)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		const summary = JSON.parse(result.stdout);
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.status).toBe("accepted");
+		const summary = envelope.result;
 		expect(summary).toEqual(
 			expect.objectContaining({
 				mode: "execute",

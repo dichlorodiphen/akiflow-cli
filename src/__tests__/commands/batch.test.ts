@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
 	buildBatchReport,
+	classifyBatchModifierResults,
+	classifyBatchResults,
 	mutableTimedGoogleEventSkipReason,
 	planEventAttendeeBatch,
 	planEventDeleteBatch,
@@ -68,6 +70,80 @@ function slot(overrides: Partial<TimeSlot> = {}): TimeSlot {
 }
 
 describe("batch command helpers", () => {
+	it("only names envelope failed ids as failed and preserves unmentioned unknowns", () => {
+		const planned = planEventDeleteBatch(
+			[
+				event({ id: "failed" }),
+				event({ id: "unmentioned" }),
+				event({ id: "accepted" }),
+			],
+			"none",
+		);
+		const classified = classifyBatchResults(planned, {
+			success: false,
+			message: "Partial failure",
+			failed: [{ id: "failed", error: "Rejected" }],
+			data: [{ id: "accepted" }],
+		});
+		expect(classified.map((item) => item.action)).toEqual([
+			"failed",
+			"unknown",
+			"accepted",
+		]);
+	});
+
+	it("matches modifier failures by operation id while unmentioned event operations stay unknown", () => {
+		const payloads = planEventAttendeeBatch(
+			[event({ id: "first" }), event({ id: "second" })],
+			["new@example.com"],
+			"add",
+		).map((item) => item.payload!);
+		const { receipts } = classifyBatchModifierResults(payloads, {
+			success: false,
+			message: "Partial failure",
+			data: [],
+			failed: [{ id: payloads[0]!.id, error: "Denied" }],
+		});
+		expect(receipts).toMatchObject([
+			{
+				operation_id: payloads[0]!.id,
+				event_id: "first",
+				status: "failed",
+				error: "Denied",
+			},
+			{ operation_id: payloads[1]!.id, event_id: "second", status: "unknown" },
+		]);
+	});
+
+	it("retains modifier processing receipts and honors failed_at and explicit pending", () => {
+		const payloads = planEventAttendeeBatch(
+			[event({ id: "first" }), event({ id: "second" })],
+			["new@example.com"],
+			"add",
+		).map((item) => item.payload!);
+		const result = classifyBatchModifierResults(payloads, {
+			success: true,
+			message: null,
+			data: [
+				{
+					...payloads[0]!,
+					failed_at: "2026-09-30T10:00:00Z",
+					result: "Rejected",
+				},
+				{ ...payloads[1]!, ...({ status: "pending" } as object) },
+			],
+		});
+		expect(result.receipts.map((receipt) => receipt.status)).toEqual([
+			"failed",
+			"pending",
+		]);
+		expect(result.receipts[0]).toMatchObject({
+			failed_at: "2026-09-30T10:00:00Z",
+			result: "Rejected",
+			kind: "patch",
+		});
+	});
+
 	it("selects cached events by date, search, and calendar", () => {
 		const selected = selectBatchEvents(
 			[

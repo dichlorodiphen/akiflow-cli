@@ -6,7 +6,7 @@ metadata: {"openclaw":{"emoji":"📋","requires":{"bins":["af"]}}}
 
 # Akiflow CLI
 
-Use `af` for Akiflow task and calendar work. Prefer `--json` for reads and parse the cleaned `result` array. Run `af refresh --json` when the user asks for the latest state or after mutations that need verification.
+Use `af` for Akiflow task and calendar work. Prefer `--json` for reads and parse the cleaned `result` array. Run `af refresh --json` when the user asks for the latest state. Use mutation `--verify` for field confirmation.
 
 Dates are local calendar dates. Use explicit `YYYY-MM-DD` in commands and reports.
 
@@ -106,6 +106,14 @@ Project listing is read-only:
 af project list
 ```
 
-Known gaps: event delete, all-day events, recurring events, reminders, conferencing, Aki chat messages, and project mutation are unsupported.
+Known gaps: all-day events, recurring events, reminders, conferencing, Aki chat messages, and project mutation are unsupported.
 
 For Southwest flight rechecks, use Chrome on `https://www.southwest.com/air/flight-status/path?departureDate=YYYY-MM-DD&flightNumber=N`, trust the rendered Southwest status, then update dependent Akiflow events with `af event update`.
+
+## Interpret Mutation Outcomes
+
+Mutation JSON is a receipt envelope with `schema_version: 1`, `command`, `status`, `receipts`, `result`, `errors`, and `warnings`. Parse the receipts and status before reporting an outcome. `accepted` means submitted, not confirmed; never describe it as created/updated/deleted successfully. Failed, unknown, pending, mismatch, timeout, and partial task outcomes exit non-zero. Preserve operation IDs for diagnosis.
+
+Add `--verify` to event create/update/delete and event attendees add/remove, task create/update/plan/snooze/complete/delete, slot create, batch events mutations, and executed task-to-event conversions when confirmation is needed. Verification uses fresh Akiflow reads, compares requested fields and time/zone, and defaults to a 15-second timeout. `verified` confirms observed Akiflow state, not provider state. Timeout claims no success. Never automatically rerun a write after an unknown outcome; inspect fresh records first.
+
+Conversion with `--delete-source` verifies every target before deleting any source. If one target is unverified, all sources remain and the command exits non-zero. Preview remains the default.
