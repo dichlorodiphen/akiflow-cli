@@ -6,12 +6,15 @@ import type { Account, Label, Task } from "../lib/api/types";
 import {
 	endOfDay,
 	type NamedRange,
-	parseDateBoundary,
-	parseMonth,
 	resolveRange,
-	resolveSingleDayRange,
 	startOfDay,
 } from "../lib/date-parser";
+import {
+	strictBoundarySelector,
+	strictDaySelector,
+	strictMonthSelector,
+	validateDateSelectors,
+} from "../lib/date-selector";
 import {
 	filterTasks as applyExtendedFilters,
 	type StatusName,
@@ -28,16 +31,12 @@ import {
 	mergeTasks,
 	removePendingTask,
 } from "../lib/task-cache";
+import {
+	createTaskSnapshot,
+	isSyntheticTaskId,
+	type TaskContext,
+} from "../lib/task-context";
 import { syncTasksCache } from "../lib/tasks-local-cache";
-
-interface TaskContext {
-	tasks: Array<{
-		shortId: number;
-		id: string;
-		title: string;
-	}>;
-	timestamp: number;
-}
 
 interface LsOptions {
 	inbox?: boolean;
@@ -312,7 +311,7 @@ function formatTaskTable(
 			: task.done
 				? "✓"
 				: "✗";
-		const displayTitle = getTaskDisplayTitle(task, 50);
+		const displayTitle = `${getTaskDisplayTitle(task, 50)}${isSyntheticTaskId(task.id) ? " [synthetic]" : ""}`;
 
 		return `${idStr}  ${statusStr}      ${displayTitle}`;
 	});
@@ -320,7 +319,7 @@ function formatTaskTable(
 	return [header, ...rows].join("\n");
 }
 
-async function saveTaskContext(tasks: Task[]): Promise<void> {
+async function saveTaskContext(tasks: Task[]): Promise<TaskContext> {
 	try {
 		await fs.mkdir(cachePath(), { recursive: true });
 	} catch {
@@ -334,11 +333,14 @@ async function saveTaskContext(tasks: Task[]): Promise<void> {
 			shortId: index + 1,
 			id: task.id,
 			title: getTaskDisplayTitle(task),
+			synthetic: isSyntheticTaskId(task.id),
 		})),
 		timestamp: Date.now(),
 	};
 
+	context.snapshot = createTaskSnapshot(context);
 	await fs.writeFile(contextFile, JSON.stringify(context, null, 2));
+	return context;
 }
 
 // ============================================================
@@ -415,23 +417,21 @@ function buildExtendedFilter(args: Record<string, unknown>): TaskFilter {
 		f.from = r.from;
 		f.to = r.to;
 	} else if (args.date) {
-		const r = resolveSingleDayRange(args.date as string);
+		const r = strictDaySelector(args.date as string);
 		if (r) {
 			f.from = r.from;
 			f.to = r.to;
 		}
 	} else if (args.month) {
-		const m = parseMonth(args.month as string);
-		if (m) {
-			f.from = new Date(m.year, m.month - 1, 1);
-			f.to = new Date(m.year, m.month, 0);
-		}
+		const r = strictMonthSelector(args.month as string);
+		f.from = r.from;
+		f.to = r.to;
 	} else if (args.from || args.to) {
 		f.from = args.from
-			? (parseDateBoundary(args.from as string, "start") ?? undefined)
+			? strictBoundarySelector(args.from as string, "start")
 			: startOfDay(new Date(0));
 		f.to = args.to
-			? (parseDateBoundary(args.to as string, "end") ?? undefined)
+			? strictBoundarySelector(args.to as string, "end")
 			: endOfDay(new Date(9999, 11, 31));
 	}
 
@@ -532,6 +532,7 @@ export const taskListCommand = defineCommand({
 		recurring: { type: "boolean", description: "Only recurring tasks" },
 	},
 	run: async ({ args }) => {
+		validateDateSelectors(args);
 		const options: LsOptions = {
 			inbox: args.inbox as boolean,
 			all: args.all as boolean,
@@ -578,9 +579,19 @@ export const taskListCommand = defineCommand({
 					).filter((task) => taskSearchMatches(task, options.search))
 				: filterTasks(tasksWithVirtualRecurring, options);
 
+			const listContext = await saveTaskContext(filteredTasks);
+			const meta = { snapshot: listContext.snapshot };
+
 			if (args.raw) {
 				const output = JSON.stringify(
-					{ result: filteredTasks, next_cursor: null, errors: [] },
+					{
+						result: filteredTasks.map((t) =>
+							isSyntheticTaskId(t.id) ? { ...t, synthetic: true } : t,
+						),
+						next_cursor: null,
+						errors: [],
+						meta,
+					},
 					null,
 					2,
 				);
@@ -597,9 +608,13 @@ export const taskListCommand = defineCommand({
 				// Cleaned shape: resolve label + account names from cache files
 				// when available, else fall back to fetching them.
 				const ctx = await buildResolveContext(client);
-				const cleaned = filteredTasks.map((t) => toCleanedTaskView(t, ctx));
+				const cleaned = filteredTasks.map((t) =>
+					isSyntheticTaskId(t.id)
+						? { ...toCleanedTaskView(t, ctx), synthetic: true }
+						: toCleanedTaskView(t, ctx),
+				);
 				const output = JSON.stringify(
-					{ result: cleaned, next_cursor: null, errors: [] },
+					{ result: cleaned, next_cursor: null, errors: [], meta },
 					null,
 					2,
 				);
@@ -617,7 +632,7 @@ export const taskListCommand = defineCommand({
 
 			console.log(output);
 
-			await saveTaskContext(filteredTasks);
+			console.log(`Snapshot: ${listContext.snapshot}`);
 		} catch (error) {
 			if (error instanceof Error) {
 				console.error(`Error: ${error.message}`);

@@ -2,6 +2,13 @@ import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
 import type { UpdateTaskPayload } from "../lib/api/types";
 import {
+	cachedTask,
+	dryRunArgs,
+	previewItem,
+	printDryRun,
+	snapshotArgs,
+} from "../lib/dry-run";
+import {
 	readTaskContext,
 	resolveTaskId,
 	taskTitleFromContext,
@@ -35,6 +42,8 @@ export const taskCompleteCommand = defineCommand({
 		description: "Mark tasks as complete by short ID or UUID",
 	},
 	args: {
+		...dryRunArgs,
+		...snapshotArgs,
 		id: {
 			type: "positional",
 			description:
@@ -63,12 +72,14 @@ export const taskCompleteCommand = defineCommand({
 		for (const id of ids) {
 			let resolvedId: string | null = null;
 			try {
-				resolvedId = resolveTaskId(id, contextFile);
+				resolvedId = resolveTaskId(id, contextFile, {
+					snapshot: args.snapshot as string | undefined,
+				});
 			} catch (error) {
 				console.error(
 					`Error: ${error instanceof Error ? error.message : error}`,
 				);
-				process.exit(1);
+				process.exit(2);
 			}
 			if (resolvedId) {
 				const title = taskTitleFromContext(resolvedId, contextFile);
@@ -87,11 +98,11 @@ export const taskCompleteCommand = defineCommand({
 			);
 			if (!contextFile) {
 				console.error(
-					"Short IDs and partial IDs require context. Run 'af task list --plain' first or provide full UUIDs.",
+					"Numeric short IDs require list context. Run 'af task list --plain' first or provide full UUIDs.",
 				);
 			}
 			if (resolvedTasks.length === 0) {
-				process.exit(1);
+				process.exit(4);
 			}
 		}
 
@@ -108,6 +119,17 @@ export const taskCompleteCommand = defineCommand({
 		}));
 
 		try {
+			if (args["dry-run"]) {
+				printDryRun(
+					await Promise.all(
+						updatePayloads.map(async (payload) =>
+							previewItem(await cachedTask(payload.id), payload),
+						),
+					),
+					args.json === true,
+				);
+				return;
+			}
 			const response = await client.upsertTasks(updatePayloads);
 
 			if (response.success) {

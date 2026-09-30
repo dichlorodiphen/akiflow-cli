@@ -21,7 +21,7 @@ describe("af command surface", () => {
 	test("removed legacy commands fail as unknown commands", async () => {
 		for (const command of ["add", "ls", "do", "block", "create", "hello"]) {
 			const result = await spawnCli([command]);
-			expect(result.exitCode).toBe(1);
+			expect(result.exitCode).toBe(2);
 			expect(result.stderr).toContain(`Unknown command ${command}`);
 		}
 	});

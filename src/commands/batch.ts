@@ -9,7 +9,6 @@ import type {
 	TimeSlot,
 	UpdateTimeSlotPayload,
 } from "../lib/api/types";
-import { readResource } from "../lib/cache";
 import {
 	CalendarResolutionError,
 	resolveCalendarFromList,
@@ -22,6 +21,8 @@ import {
 	resolveSingleDayRange,
 	startOfDay,
 } from "../lib/date-parser";
+import { dryRunArgs, mutationReader, previewItem } from "../lib/dry-run";
+import { EXIT_CODES } from "../lib/exit-codes";
 import { filterEvents } from "../lib/filters/event";
 import {
 	buildAttendeeModifierPayload,
@@ -65,6 +66,9 @@ interface BatchDateRange {
 }
 
 interface PlannedBatchItem<TPayload> {
+	before?: unknown;
+	after?: unknown;
+	notification_policy?: string;
 	id: string;
 	title: string;
 	action: BatchItemAction;
@@ -76,6 +80,9 @@ interface PlannedBatchItem<TPayload> {
 }
 
 export interface BatchReportItem {
+	before?: unknown;
+	after?: unknown;
+	notification_policy?: string;
 	id: string;
 	title: string;
 	action: BatchItemAction;
@@ -137,6 +144,7 @@ const slotSelectorArgs = {
 } as const;
 
 const executionArgs = {
+	...dryRunArgs,
 	execute: {
 		type: "boolean",
 		description: "Perform the batch mutation; default is dry-run",
@@ -472,6 +480,9 @@ function toReportItem<TPayload>(
 		id: item.id,
 		title: item.title,
 		action: item.action,
+		before: item.before,
+		after: item.after,
+		notification_policy: item.notification_policy,
 		reason: item.reason,
 		emails: item.emails,
 		start: item.start,
@@ -515,6 +526,12 @@ function printBatchReport(report: BatchReport, json: boolean): void {
 	for (const item of report.items) {
 		const emails = item.emails?.length ? ` [${item.emails.join(", ")}]` : "";
 		const reason = item.reason ? ` - ${item.reason}` : "";
+		if (report.mode === "dry-run") {
+			console.log(
+				`  ${JSON.stringify(item.before)} → ${JSON.stringify(item.after)}`,
+			);
+			console.log(`  Notification policy: ${item.notification_policy}`);
+		}
 		const time = item.start ? ` @ ${item.start}` : "";
 		console.log(
 			`- ${item.action}: ${item.title} (${item.id})${time}${emails}${reason}`,
@@ -529,7 +546,9 @@ function failAfterReport<TPayload>(
 ): never {
 	const report = buildBatchReport(operation, "execute", items);
 	printBatchReport(report, json);
-	process.exit(1);
+	process.exit(
+		report.changed > 0 ? EXIT_CODES.partialSuccess : EXIT_CODES.upstream,
+	);
 }
 
 async function runBatchEventAttendees(
@@ -540,8 +559,8 @@ async function runBatchEventAttendees(
 	const emails = collectAttendeeEmails(args);
 	const client = createClient();
 	const [events, calendars] = await Promise.all([
-		readResource(client, "events"),
-		readResource(client, "calendars"),
+		mutationReader(args.execute !== true)(client, "events"),
+		mutationReader(args.execute !== true)(client, "calendars"),
 	]);
 	const selected = selectBatchEvents(events, calendars, args);
 	let planned = planEventAttendeeBatch(selected, emails, mode);
@@ -550,6 +569,29 @@ async function runBatchEventAttendees(
 	const json = args.json === true;
 
 	if (!execute) {
+		planned = planned.map((item) => {
+			const event = selected.find((record) => record.id === item.id);
+			const existing = event ? [...existingAttendeeEmails(event)] : [];
+			const changes = item.emails ?? [];
+			const after = event
+				? {
+						...event,
+						attendees:
+							mode === "add"
+								? [...existing, ...changes]
+								: existing.filter((email) => !changes.includes(email)),
+					}
+				: null;
+			return {
+				...item,
+				...previewItem(
+					event ? { ...event, attendees: existing } : null,
+					after,
+					"all",
+				),
+				action: item.action,
+			};
+		});
 		printBatchReport(buildBatchReport(operation, "dry-run", planned), json);
 		return;
 	}
@@ -586,8 +628,8 @@ async function runBatchEventDelete(
 
 	const client = createClient();
 	const [events, calendars] = await Promise.all([
-		readResource(client, "events"),
-		readResource(client, "calendars"),
+		mutationReader(args.execute !== true)(client, "events"),
+		mutationReader(args.execute !== true)(client, "calendars"),
 	]);
 	const selected = selectBatchEvents(events, calendars, args);
 	let planned = planEventDeleteBatch(selected, notify);
@@ -596,6 +638,17 @@ async function runBatchEventDelete(
 	const json = args.json === true;
 
 	if (!execute) {
+		planned = planned.map((item) => ({
+			...item,
+			before: selected.find((record) => record.id === item.id) ?? null,
+			after:
+				item.payload ??
+				selected.find((record) => record.id === item.id) ??
+				null,
+			notification_policy: operation.includes("slot")
+				? "none"
+				: String(args.notify ?? "all"),
+		}));
 		printBatchReport(buildBatchReport(operation, "dry-run", planned), json);
 		return;
 	}
@@ -627,8 +680,8 @@ async function runBatchSlotDelete(
 	requireSelector(args, SLOT_SELECTOR_FLAGS, "slots");
 	const client = createClient();
 	const [slots, calendars] = await Promise.all([
-		readResource(client, "time_slots"),
-		readResource(client, "calendars"),
+		mutationReader(args.execute !== true)(client, "time_slots"),
+		mutationReader(args.execute !== true)(client, "calendars"),
 	]);
 	const selected = selectBatchSlots(slots, calendars, args);
 	let planned = planSlotDeleteBatch(selected);
@@ -637,6 +690,17 @@ async function runBatchSlotDelete(
 	const json = args.json === true;
 
 	if (!execute) {
+		planned = planned.map((item) => ({
+			...item,
+			before: selected.find((record) => record.id === item.id) ?? null,
+			after:
+				item.payload ??
+				selected.find((record) => record.id === item.id) ??
+				null,
+			notification_policy: operation.includes("slot")
+				? "none"
+				: String(args.notify ?? "all"),
+		}));
 		printBatchReport(buildBatchReport(operation, "dry-run", planned), json);
 		return;
 	}

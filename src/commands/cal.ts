@@ -16,12 +16,15 @@ import {
 	endOfDay,
 	formatLocalDate,
 	type NamedRange,
-	parseDateBoundary,
 	parseLocalDate,
 	resolveRange,
-	resolveSingleDayRange,
 	startOfDay,
 } from "../lib/date-parser";
+import {
+	strictBoundarySelector,
+	strictDaySelector,
+	validateDateSelectors,
+} from "../lib/date-selector";
 import {
 	type EventFilter,
 	filterEvents,
@@ -208,16 +211,14 @@ function buildEventFilter(
 	const range = named
 		? resolveRange(named)
 		: args.date
-			? (resolveSingleDayRange(args.date as string) ?? resolveRange("today"))
+			? strictDaySelector(args.date as string)
 			: args.from || args.to
 				? {
 						from: args.from
-							? (parseDateBoundary(args.from as string, "start") ??
-								startOfDay(new Date(0)))
+							? strictBoundarySelector(args.from as string, "start")
 							: startOfDay(new Date(0)),
 						to: args.to
-							? (parseDateBoundary(args.to as string, "end") ??
-								endOfDay(new Date(9999, 11, 31)))
+							? strictBoundarySelector(args.to as string, "end")
 							: endOfDay(new Date(9999, 11, 31)),
 					}
 				: resolveRange("today");
@@ -511,6 +512,7 @@ export const cal = defineCommand({
 	},
 	run: async (context) => {
 		const args = context.args;
+		validateDateSelectors(args);
 		const showFree = args.free as boolean;
 
 		try {

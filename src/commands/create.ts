@@ -22,8 +22,17 @@ import {
 	parseDate,
 	parseTime,
 } from "../lib/date-parser";
+import {
+	cachedTask,
+	dryRunArgs,
+	dryRunCalendar,
+	mutationReader,
+	previewItem,
+	printDryRun,
+} from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { addPendingTask } from "../lib/task-cache";
+import { isSyntheticTaskId } from "../lib/task-context";
 
 function stringValues(value: unknown): string[] {
 	if (value == null) return [];
@@ -162,11 +171,16 @@ async function resolveDescription(
 	}
 }
 
-async function resolveProjectId(projectName: string | undefined) {
+async function resolveProjectId(
+	projectName: string | undefined,
+	dryRun = false,
+) {
 	if (!projectName) return undefined;
 
 	const client = createClient();
-	const labelsResponse = await client.getLabels();
+	const labelsResponse = dryRun
+		? { data: await mutationReader(true)(client, "labels") }
+		: await client.getLabels();
 	const label = labelsResponse.data.find(
 		(l) => l.title.toLowerCase() === projectName.toLowerCase(),
 	);
@@ -191,6 +205,7 @@ export const createTaskCommand = defineCommand({
 		description: "Create an Akiflow task",
 	},
 	args: {
+		...dryRunArgs,
 		title: {
 			type: "positional",
 			description: "Task title",
@@ -251,7 +266,9 @@ export const createTaskCommand = defineCommand({
 			const taskDate = date ?? getTodayDate();
 			datetime = resolveTime(taskDate, at);
 			datetimeTz = getLocalTimezone();
-			calendarId = await getDefaultCalendarId(client);
+			calendarId = args["dry-run"]
+				? (await dryRunCalendar()).id
+				: await getDefaultCalendarId(client);
 		}
 
 		let duration: number | undefined;
@@ -269,13 +286,20 @@ export const createTaskCommand = defineCommand({
 		if (datetime) task.datetime = datetime;
 		if (datetimeTz) task.datetime_tz = datetimeTz;
 		if (duration !== undefined) task.duration = duration;
-		const listId = await resolveProjectId(projectName);
+		const listId = await resolveProjectId(
+			projectName,
+			args["dry-run"] === true,
+		);
 		if (listId) task.listId = listId;
 		if (calendarId) {
 			task.calendar_id = calendarId;
 			task.status = 2;
 		}
 
+		if (args["dry-run"]) {
+			printDryRun([previewItem(null, task)], args.json === true);
+			return;
+		}
 		const response = await client.upsertTasks([task]);
 		const createdTask = response.data[0];
 
@@ -311,6 +335,7 @@ export const createSlotCommand = defineCommand({
 		description: "Create an Akiflow task slot, optionally containing tasks",
 	},
 	args: {
+		...dryRunArgs,
 		title: {
 			type: "positional",
 			description: "Slot title",
@@ -362,6 +387,13 @@ export const createSlotCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		const existingTaskIds = stringValues(args["task-id"]);
+		for (const taskId of existingTaskIds) {
+			if (isSyntheticTaskId(taskId)) {
+				console.error(`Error: Synthetic task ID "${taskId}" cannot be mutated`);
+				process.exit(2);
+			}
+		}
 		const title = args.title as string;
 		const date = resolveDate(args);
 		const at = args.at as string;
@@ -381,10 +413,12 @@ export const createSlotCommand = defineCommand({
 		).toISOString();
 		let calendar: Calendar;
 		try {
-			calendar = await resolveWritableCalendar(
-				client,
-				args.calendar as string | undefined,
-			);
+			calendar = args["dry-run"]
+				? await dryRunCalendar(args.calendar as string | undefined)
+				: await resolveWritableCalendar(
+						client,
+						args.calendar as string | undefined,
+					);
 		} catch (error) {
 			if (error instanceof CalendarResolutionError)
 				failCalendarResolution(error);
@@ -408,7 +442,9 @@ export const createSlotCommand = defineCommand({
 			global_updated_at: now,
 		};
 
-		const slotResponse = await client.upsertTimeSlots([slotPayload]);
+		const slotResponse = args["dry-run"]
+			? { data: [slotPayload] }
+			: await client.upsertTimeSlots([slotPayload]);
 		const createdSlot = slotResponse.data[0];
 
 		if (!createdSlot) {
@@ -422,7 +458,6 @@ export const createSlotCommand = defineCommand({
 				? undefined
 				: parseDurationToSeconds(taskDurationInput);
 		const newTaskTitles = stringValues(args.task);
-		const existingTaskIds = stringValues(args["task-id"]);
 		const taskPayloads: Array<CreateTaskPayload | UpdateTaskPayload> = [];
 
 		for (const taskTitle of newTaskTitles) {
@@ -453,6 +488,24 @@ export const createSlotCommand = defineCommand({
 			});
 		}
 
+		if (args["dry-run"]) {
+			const existing = new Set(existingTaskIds);
+			printDryRun(
+				[
+					previewItem(null, slotPayload),
+					...(await Promise.all(
+						taskPayloads.map(async (payload) =>
+							previewItem(
+								existing.has(payload.id) ? await cachedTask(payload.id) : null,
+								payload,
+							),
+						),
+					)),
+				],
+				args.json === true,
+			);
+			return;
+		}
 		const taskResponse =
 			taskPayloads.length > 0
 				? await client.upsertTasks(taskPayloads)
@@ -492,6 +545,7 @@ export const createEventCommand = defineCommand({
 		description: "Create a timed Google calendar event through Akiflow",
 	},
 	args: {
+		...dryRunArgs,
 		title: {
 			type: "positional",
 			description: "Event title",
@@ -561,11 +615,13 @@ export const createEventCommand = defineCommand({
 		).toISOString();
 		let calendar: Calendar;
 		try {
-			calendar = await resolveEventTargetCalendar(
-				client,
-				args.calendar as string | undefined,
-				"af event create",
-			);
+			calendar = args["dry-run"]
+				? await dryRunCalendar(args.calendar as string | undefined, true)
+				: await resolveEventTargetCalendar(
+						client,
+						args.calendar as string | undefined,
+						"af event create",
+					);
 		} catch (error) {
 			if (error instanceof CalendarResolutionError)
 				failCalendarResolution(error);
@@ -581,6 +637,10 @@ export const createEventCommand = defineCommand({
 			location,
 		});
 
+		if (args["dry-run"]) {
+			printDryRun([previewItem(null, eventPayload, "all")], args.json === true);
+			return;
+		}
 		const response = await client.createEvents([eventPayload]);
 		const createdEvent = response.data[0];
 

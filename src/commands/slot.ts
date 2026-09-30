@@ -6,7 +6,6 @@ import type {
 	UpdateTaskPayload,
 	UpdateTimeSlotPayload,
 } from "../lib/api/types";
-import { readResource } from "../lib/cache";
 import {
 	CalendarResolutionError,
 	resolveWritableCalendar,
@@ -20,12 +19,20 @@ import {
 	parseTime,
 	resolveSingleDayRange,
 } from "../lib/date-parser";
+import {
+	dryRunArgs,
+	dryRunCalendar,
+	mutationReader,
+	previewItem,
+	printDryRun,
+} from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import { isSyntheticTaskId } from "../lib/task-context";
 import { createSlotCommand } from "./create";
 
-function fail(message: string): never {
+function fail(message: string, exitCode = 1): never {
 	console.error(`Error: ${message}`);
-	process.exit(1);
+	process.exit(exitCode);
 }
 
 function stringValues(value: unknown): string[] {
@@ -88,8 +95,12 @@ export function resolveCachedSlot(
 }
 
 export function resolveCachedTask(tasks: Task[], identifier: string): Task {
+	if (isSyntheticTaskId(identifier))
+		fail(`Synthetic task ID "${identifier}" cannot be mutated`, 2);
 	const exact = tasks.find((task) => task.id === identifier);
 	if (exact) {
+		if (isSyntheticTaskId(exact.id))
+			fail(`Synthetic task ID "${exact.id}" cannot be mutated`, 2);
 		if (exact.deleted_at) fail(`Task "${exact.id}" is deleted`);
 		return exact;
 	}
@@ -97,6 +108,8 @@ export function resolveCachedTask(tasks: Task[], identifier: string): Task {
 	const matches = tasks.filter((task) => task.id.startsWith(identifier));
 	const [match] = matches;
 	if (matches.length === 1 && match) {
+		if (isSyntheticTaskId(match.id))
+			fail(`Synthetic task ID "${match.id}" cannot be mutated`, 2);
 		if (match.deleted_at) fail(`Task "${match.id}" is deleted`);
 		return match;
 	}
@@ -466,8 +479,8 @@ export const listSlotCommand = defineCommand({
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
 		const [slots, tasks] = await Promise.all([
-			readResource(client, "time_slots"),
-			readResource(client, "tasks"),
+			mutationReader(args["dry-run"] === true)(client, "time_slots"),
+			mutationReader(args["dry-run"] === true)(client, "tasks"),
 		]);
 		const result = selectSlots(slots, args).map((slot) =>
 			toSlotWithTasks(slot, tasks),
@@ -502,8 +515,8 @@ export const showSlotCommand = defineCommand({
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
 		const [slots, tasks] = await Promise.all([
-			readResource(client, "time_slots"),
-			readResource(client, "tasks"),
+			mutationReader(args["dry-run"] === true)(client, "time_slots"),
+			mutationReader(args["dry-run"] === true)(client, "tasks"),
 		]);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		requireActiveSlot(slot);
@@ -525,6 +538,7 @@ export const updateSlotCommand = defineCommand({
 			"Move, resize, rename, or update existing task membership for a slot",
 	},
 	args: {
+		...dryRunArgs,
 		id: {
 			type: "positional",
 			description: "Slot id or unique id prefix",
@@ -574,6 +588,10 @@ export const updateSlotCommand = defineCommand({
 			args.calendar !== undefined;
 		const addTaskInputs = unique(stringValues(args["add-task-id"]));
 		const removeTaskInputs = unique(stringValues(args["remove-task-id"]));
+		for (const taskId of [...addTaskInputs, ...removeTaskInputs]) {
+			if (isSyntheticTaskId(taskId))
+				fail(`Synthetic task ID "${taskId}" cannot be mutated`, 2);
+		}
 		const hasTaskChange =
 			addTaskInputs.length > 0 || removeTaskInputs.length > 0;
 
@@ -584,8 +602,8 @@ export const updateSlotCommand = defineCommand({
 		}
 
 		const [slots, tasks] = await Promise.all([
-			readResource(client, "time_slots"),
-			readResource(client, "tasks"),
+			mutationReader(args["dry-run"] === true)(client, "time_slots"),
+			mutationReader(args["dry-run"] === true)(client, "tasks"),
 		]);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		requireActiveSlot(slot);
@@ -607,7 +625,9 @@ export const updateSlotCommand = defineCommand({
 		if (args.calendar !== undefined) {
 			try {
 				calendarId = (
-					await resolveWritableCalendar(client, args.calendar as string)
+					args["dry-run"]
+						? await dryRunCalendar(args.calendar as string)
+						: await resolveWritableCalendar(client, args.calendar as string)
 				).id;
 			} catch (error) {
 				if (error instanceof CalendarResolutionError) {
@@ -626,6 +646,32 @@ export const updateSlotCommand = defineCommand({
 			now,
 		});
 
+		if (args["dry-run"]) {
+			printDryRun(
+				[
+					previewItem(
+						slot,
+						hasSlotFieldChange
+							? buildSlotUpdatePayload({
+									slot,
+									title: args.title as string | undefined,
+									calendarId,
+									timing,
+									now,
+								})
+							: slot,
+					),
+					...taskPayloads.map((payload) =>
+						previewItem(
+							tasks.find((task) => task.id === payload.id) ?? null,
+							payload,
+						),
+					),
+				],
+				args.json === true,
+			);
+			return;
+		}
 		let updatedSlot: TimeSlot = slot;
 		if (hasSlotFieldChange) {
 			const slotPayload = buildSlotUpdatePayload({
@@ -683,6 +729,7 @@ export const deleteSlotCommand = defineCommand({
 		description: "Soft-delete an Akiflow task slot",
 	},
 	args: {
+		...dryRunArgs,
 		id: {
 			type: "positional",
 			description: "Slot id or unique id prefix",
@@ -696,9 +743,16 @@ export const deleteSlotCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
-		const slots = await readResource(client, "time_slots");
+		const slots = await mutationReader(args["dry-run"] === true)(
+			client,
+			"time_slots",
+		);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		const payload = buildSlotDeletePayload({ slot });
+		if (args["dry-run"]) {
+			printDryRun([previewItem(slot, payload)], args.json === true);
+			return;
+		}
 		const response = await client.upsertTimeSlots([payload]);
 		const deletedSlot = response.data[0];
 		if (!deletedSlot) fail("Failed to delete slot - no data returned");
