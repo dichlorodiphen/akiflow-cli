@@ -425,12 +425,8 @@ export const createTaskCommand = defineCommand({
 				[task],
 				args.verify === true,
 			);
-			for (const receipt of outcome.receipts) {
-				if (receipt.status === "accepted" || receipt.status === "verified") {
-					const created = response.data.find((t) => t.id === receipt.id) ?? null;
-					await recordTaskIntent("create", task, created ?? undefined);
-				}
-			}
+			const createdTask = response.data[0] ?? undefined;
+			await recordTaskIntent("create", task, createdTask);
 			printTaskMutation(
 				"task create",
 				args.json === true,
