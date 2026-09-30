@@ -38,6 +38,7 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import { previewOccurrences, validateRRule } from "../lib/recurrence";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { addPendingTask } from "../lib/task-cache";
 import { isSyntheticTaskId } from "../lib/task-context";
@@ -96,6 +97,8 @@ export interface BuildEventPayloadInput {
 	id?: string;
 	sendUpdates?: EventSendUpdates;
 	now?: string;
+	/** Validated, normalized RRULE string (without RRULE: prefix). */
+	rrule?: string | null;
 }
 
 export function buildCreateEventPayload({
@@ -109,6 +112,7 @@ export function buildCreateEventPayload({
 	id,
 	sendUpdates = "none",
 	now,
+	rrule = null,
 }: BuildEventPayloadInput): CreateEventPayload {
 	const content: Record<string, unknown> = { sendUpdates };
 	if (location?.trim()) content.location = location.trim();
@@ -142,7 +146,7 @@ export function buildCreateEventPayload({
 		etag: null,
 		content,
 		attendees: [],
-		recurrence: null,
+		recurrence: rrule ? [`RRULE:${rrule}`] : null,
 		recurrence_exception: false,
 		declined: false,
 		read_only: false,
@@ -623,6 +627,11 @@ export const createEventCommand = defineCommand({
 			type: "string",
 			description: "Guest notification mode: none (default, silent) or all",
 		},
+		rrule: {
+			type: "string",
+			description:
+				"Recurrence rule (e.g., 'FREQ=WEEKLY;BYDAY=MO,WE,FR'). Validated; preview first 5 occurrences with --dry-run",
+		},
 		verify: verifyFlag,
 		json: {
 			type: "boolean",
@@ -656,6 +665,20 @@ export const createEventCommand = defineCommand({
 			process.exit(1);
 		}
 
+		// Validate --rrule early (before any side effects).
+		const rruleInput = (args.rrule as string | undefined)?.trim() || null;
+		let normalizedRrule: string | null = null;
+		if (rruleInput) {
+			try {
+				normalizedRrule = validateRRule(rruleInput);
+			} catch (error) {
+				console.error(
+					`Error: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				process.exit(2);
+			}
+		}
+
 		const durationSeconds = parseDurationToSeconds(durationInput);
 		const startTime = resolveTime(date, at);
 		const endTime = new Date(
@@ -684,9 +707,24 @@ export const createEventCommand = defineCommand({
 			calendar,
 			location,
 			sendUpdates,
+			rrule: normalizedRrule,
 		});
 
 		if (args["dry-run"]) {
+			// For recurring events, preview the bounded occurrences in the
+			// owner timezone so the user can verify the rule before submitting.
+			if (normalizedRrule) {
+				const preview = previewOccurrences(
+					normalizedRrule,
+					new Date(startTime),
+					timezone,
+					5,
+				);
+				console.error("Recurrence preview (first 5 occurrences):");
+				for (const occurrence of preview.occurrences) {
+					console.error(`  ${occurrence}`);
+				}
+			}
 			printDryRun(
 				[previewItem(null, eventPayload, sendUpdates)],
 				args.json === true,

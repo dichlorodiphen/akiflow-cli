@@ -63,7 +63,7 @@ Use `af event create` for real timed Google Calendar events:
 af event create "Meeting" --date 2026-06-19 --at 14:30 --duration 30m --description "Details" --location "Office"
 ```
 
-`af event create` v1 supports timed, non-recurring Google events only. It accepts optional `--calendar`, `--description`, `--description-file`, `--location`, and `--json`.
+`af event create` supports timed Google events, including recurring series via `--rrule` (e.g., `--rrule 'FREQ=WEEKLY;BYDAY=MO,WE,FR'`). The rule is validated and `--dry-run` previews the first 5 occurrences in the event timezone. It accepts optional `--calendar`, `--description`, `--description-file`, `--location`, and `--json`.
 
 ## Update Events And Attendees
 
@@ -73,7 +73,7 @@ af event attendees add <event-id> julia@example.com
 af event attendees remove <event-id> julia@example.com
 ```
 
-`af event` refuses all-day, recurring, hidden, deleted, read-only, and non-Google events. Event updates and attendee changes send Google update notifications.
+`af event` refuses all-day, hidden, deleted, read-only, and non-Google events. For recurring events, `--scope series` edits the series master; `--scope instance` edits a single occurrence (anchored by `original_start_time`, via Google fallback with `sendUpdates=none`; Akiflow sync reported as pending). Recurring events require explicit `--scope`. Event updates and attendee changes default to silent (`--send-updates none`).
 
 ## Convert Tasks To Events
 

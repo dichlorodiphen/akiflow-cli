@@ -66,14 +66,14 @@ Numeric short IDs come from the latest task list snapshot; use `--snapshot <toke
 ## Events
 
 ```bash
-af event create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--description <text>|--description-file <path>] [--location <text>] [--send-updates none|all] [--json]
-af event update <event-id> [--date <date>] [--at HH:MM] [--duration <duration>] [--title <text>] [--description <text>|--description-file <path>] [--location <text>] [--send-updates none|all] [--json]
-af event delete <event-id> [--send-updates none|all] [--json]
+af event create <title> --date <date> --at HH:MM --duration <duration> [--calendar <calendar>] [--description <text>|--description-file <path>] [--location <text>] [--rrule <rule>] [--send-updates none|all] [--json]
+af event update <event-id> [--date <date>] [--at HH:MM] [--duration <duration>] [--title <text>] [--description <text>|--description-file <path>] [--location <text>] [--scope series|instance] [--instance-anchor <ISO>] [--send-updates none|all] [--json]
+af event delete <event-id> [--scope series] [--truncate-before <date>] [--send-updates none|all] [--json]
 af event attendees add <event-id> <email> [more emails...] [--send-updates none|all] [--json]
 af event attendees remove <event-id> <email> [more emails...] [--send-updates none|all] [--json]
 ```
 
-Event v1 supports timed, writable, non-recurring Google events only. All-day, recurrence, reminders, and conferencing are unsupported. Event mutations default to `--send-updates none` (silent guest handling); use `--send-updates all` to notify guests.
+Event v1 supports timed, writable Google events. `--rrule` creates recurring series (validated, serialized as `recurrence:['RRULE:...']`; `--dry-run` previews the first 5 occurrences in the event timezone). Recurring events require explicit `--scope`: `series` edits/deletes the master, `instance` edits a single occurrence via the Google fallback adapter (anchored by `original_start_time`, never current `start_time`; Akiflow sync reported as pending). Series delete truncates (via `--truncate-before` setting RRULE UNTIL) or deletes the master — never loops instances. All-day, reminders, and conferencing are unsupported. Event mutations default to `--send-updates none` (silent guest handling); use `--send-updates all` to notify guests.
 
 ## Batch Operations
 
