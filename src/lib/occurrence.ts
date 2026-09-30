@@ -260,6 +260,6 @@ export function attachProvenance(
 ): Occurrence[] {
 	return occurrences.map((o) => ({
 		...o,
-		provenance: { ...o.provenance, ...metadata, pending: false },
+		provenance: { ...o.provenance, ...metadata, pending: o.provenance.pending },
 	}));
 }
