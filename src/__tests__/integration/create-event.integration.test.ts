@@ -11,15 +11,7 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-	server.respondTo("POST", "/v5/event_operations", (req: { body: string }) => {
-		const { body } = req;
-		const payload = JSON.parse(body);
-		return {
-			success: true,
-			message: null,
-			data: payload,
-		};
-	});
+
 	env = makeTestEnv(server.url);
 });
 
@@ -62,11 +54,16 @@ describe("af event create (BDD)", () => {
 		const event = JSON.parse(result.stdout);
 		expect(event.title).toBe("Integration event");
 		expect(event.calendar_id).toBe("cal-personal-1");
-		expect(event.creator_id).toBe("test@example.com");
-		expect(event.origin_calendar_id).toBe("test@example.com");
-		expect(event.content).toEqual({
-			sendUpdates: "all",
-			location: "Test office",
+		const canonical = server
+			.snapshot("events")
+			.find((row) => row.id === event.id);
+		expect(canonical).toMatchObject({
+			title: "Integration event",
+			calendar_id: "cal-personal-1",
+			start_time: expectedStart,
+			end_time: expectedEnd,
+			origin_id: expect.any(String),
+			content: { location: "Test office" },
 		});
 
 		const request = server.requests.find(

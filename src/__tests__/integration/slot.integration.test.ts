@@ -11,22 +11,7 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-	server.respondTo("PATCH", "/v5/tasks", (req: { body: string }) => {
-		const payload = JSON.parse(req.body);
-		return {
-			success: true,
-			message: null,
-			data: payload,
-		};
-	});
-	server.respondTo("PATCH", "/v5/time_slots", (req: { body: string }) => {
-		const payload = JSON.parse(req.body);
-		return {
-			success: true,
-			message: null,
-			data: payload,
-		};
-	});
+
 	env = makeTestEnv(server.url);
 });
 
@@ -180,11 +165,17 @@ describe("af slot (BDD)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const deletedSlot = JSON.parse(result.stdout);
-		expect(deletedSlot).toEqual({
-			id: "slot-focus-1",
-			deleted_at: expect.any(String),
-			global_updated_at: expect.any(String),
-		});
+		// The behavioral fake server returns the full canonical row (with
+		// server-assigned origin_id, timestamps, and normalized fields), not
+		// the minimal echo of the old plumbing fake. Assert the deletion
+		// markers, not the whole row shape.
+		expect(deletedSlot).toEqual(
+			expect.objectContaining({
+				id: "slot-focus-1",
+				deleted_at: expect.any(String),
+				global_updated_at: expect.any(String),
+			}),
+		);
 
 		const request = server.requests.find(
 			(r) => r.method === "PATCH" && r.url.pathname === "/v5/time_slots",

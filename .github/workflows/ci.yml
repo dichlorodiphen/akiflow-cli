@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Extend this list to exercise additional host timezones.
+        timezone: [UTC, America/Los_Angeles]
+    env:
+      TZ: ${{ matrix.timezone }}
+      AF_CONFIG_DIR: ${{ runner.temp }}/af-ci-config
+      AF_CACHE_DIR: ${{ runner.temp }}/af-ci-cache
+      AF_API_BASE: http://127.0.0.1:1
+      AF_REFRESH_URL: http://127.0.0.1:1/oauth/refreshToken
+      AF_NO_AUTO_SYNC: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Matches the Bun version used for local verification.
+          bun-version: "1.4.2"
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Biome check (no writes)
+        run: bunx biome check .
+      - name: Full unit suite (including version)
+        run: bun run test:unit
+      - name: Full integration suite
+        run: bun run test:integration
+      - name: Compiled binary smoke check
+        run: bun run test:smoke

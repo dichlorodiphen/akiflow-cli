@@ -22,7 +22,10 @@ describe("af command surface", () => {
 		for (const command of ["add", "ls", "do", "block", "create", "hello"]) {
 			const result = await spawnCli([command]);
 			expect(result.exitCode).toBe(1);
-			expect(result.stderr).toContain(`Unknown command ${command}`);
+			// citty colorizes the command name when stderr is a TTY; strip
+			// ANSI codes so this passes with and without color.
+			const plain = result.stderr.replace(/\[[0-9;]*m/g, "");
+			expect(plain).toContain(`Unknown command ${command}`);
 		}
 	});
 

@@ -50,7 +50,7 @@ describe("FakeAkiflowServer", () => {
 
 	test("returns 404 when no canned response", async () => {
 		await server.start();
-		const resp = await fetch(`${server.url}/v5/tasks`);
+		const resp = await fetch(`${server.url}/unknown`);
 		expect(resp.status).toBe(404);
 	});
 

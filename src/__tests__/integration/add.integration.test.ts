@@ -11,11 +11,7 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-	// Echo back the upserted task(s) so `af task create` sees data to confirm creation
-	server.respondTo("PATCH", "/v5/tasks", ({ body }: { body: string }) => {
-		const upserts = JSON.parse(body) as Array<Record<string, unknown>>;
-		return { success: true, message: null, data: upserts };
-	});
+
 	env = makeTestEnv(server.url);
 });
 afterEach(async () => {

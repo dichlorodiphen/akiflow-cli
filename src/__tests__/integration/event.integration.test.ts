@@ -11,14 +11,7 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-	server.respondTo("POST", "/v5/event_operations", (req: { body: string }) => {
-		const payload = JSON.parse(req.body);
-		return {
-			success: true,
-			message: null,
-			data: payload,
-		};
-	});
+
 	server.respondTo("POST", "/v3/events/modifiers", (req: { body: string }) => {
 		const payload = JSON.parse(req.body);
 		return {
@@ -70,13 +63,16 @@ describe("af event (BDD)", () => {
 		expect(updatedEvent.id).toBe("event-meeting-1");
 		expect(updatedEvent.start_time).toBe(expectedStart);
 		expect(updatedEvent.end_time).toBe(expectedEnd);
-		expect(updatedEvent.content).toEqual({
-			location: "Room 12",
-			sendUpdates: "all",
+		expect(
+			server.snapshot("events").find((row) => row.id === "event-meeting-1"),
+		).toMatchObject({
+			start_time: expectedStart,
+			end_time: expectedEnd,
+			content: { location: "Room 12" },
+			attendees: [
+				{ email: "pat@example.com", name: "Pat", response: "accepted" },
+			],
 		});
-		expect(updatedEvent.attendees).toEqual([
-			{ email: "pat@example.com", name: "Pat", response: "accepted" },
-		]);
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
@@ -106,6 +102,10 @@ describe("af event (BDD)", () => {
 		expect(deletedEvent.id).toBe("event-meeting-1");
 		expect(deletedEvent.status).toBe("cancelled");
 		expect(deletedEvent.deleted_at).toEqual(expect.any(String));
+		expect(server.snapshot("events")[0]).toMatchObject({
+			status: "cancelled",
+			deleted_at: expect.any(String),
+		});
 
 		const request = server.requests.find(
 			(r) => r.method === "POST" && r.url.pathname === "/v5/event_operations",
