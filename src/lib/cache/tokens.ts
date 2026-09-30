@@ -11,6 +11,8 @@ import {
 import { withLock } from "./lock";
 
 export interface Tokens {
+	/** Explicit task tombstone confirmations, published with the observation generation. */
+	deleted_tasks?: Record<string, string>;
 	tasks?: string;
 	events?: string;
 	time_slots?: string;

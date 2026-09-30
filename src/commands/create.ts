@@ -40,8 +40,12 @@ import {
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { previewOccurrences, validateRRule } from "../lib/recurrence";
-import { addPendingTask } from "../lib/task-cache";
-import { isSyntheticTaskId } from "../lib/task-context";
+import {
+	assertMutableTaskId,
+	isSyntheticTaskId,
+	readTaskContext,
+	resolveTaskId,
+} from "../lib/task-context";
 import {
 	printTaskMutation,
 	type TaskOutcome,
@@ -58,6 +62,7 @@ import {
 	zonedTimeToUtc,
 } from "../lib/timezone";
 import { resolveEffectiveTimezone } from "../lib/timezone-profile";
+import { recordTaskIntent } from "../lib/tasks";
 import { verifyEventFields } from "../lib/verification";
 import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 
@@ -422,7 +427,8 @@ export const createTaskCommand = defineCommand({
 			);
 			const createdTask =
 				response.data.find((record) => record.id === task.id) ?? null;
-			if (outcome.ok && createdTask) await addPendingTask(createdTask);
+			if (outcome.ok && createdTask)
+				await recordTaskIntent("create", task, createdTask);
 			printTaskMutation(
 				"task create",
 				args.json === true,
@@ -649,7 +655,10 @@ export const createSlotCommand = defineCommand({
 								r.id === task.id && ["accepted", "verified"].includes(r.status),
 						),
 					);
-					for (const task of createdTasks) await addPendingTask(task);
+					for (const task of createdTasks) {
+						const payload = taskPayloads.find((p) => p.id === task.id);
+						if (payload) await recordTaskIntent("create", payload, task);
+					}
 				} catch (error) {
 					outcomes.push(
 						unknownTaskOutcome(

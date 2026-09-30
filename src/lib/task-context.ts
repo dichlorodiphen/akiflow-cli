@@ -36,6 +36,14 @@ export function isSyntheticTaskId(identifier: string): boolean {
 	return identifier.startsWith("virtual:");
 }
 
+export function assertMutableTaskId(id: string): void {
+	if (isSyntheticTaskId(id)) {
+		throw validationError(
+			`Synthetic task ID "${id}" cannot be mutated; use the real recurring task UUID`,
+		);
+	}
+}
+
 export function createTaskSnapshot(
 	context: Pick<TaskContext, "tasks" | "timestamp">,
 ): string {
@@ -82,11 +90,7 @@ export function resolveTaskId(
 	context: TaskContext | null,
 	options: TaskIdOptions = {},
 ): string | null {
-	if (isSyntheticTaskId(identifier)) {
-		throw validationError(
-			`Synthetic task ID "${identifier}" cannot be mutated; use the real recurring task UUID`,
-		);
-	}
+	assertMutableTaskId(identifier);
 	if (isFullUuid(identifier)) return identifier;
 	const warn = options.warn ?? console.warn;
 
@@ -95,7 +99,8 @@ export function resolveTaskId(
 			(task) => task.shortId === Number(identifier),
 		);
 		if (!task) return null;
-		if (isSyntheticTaskId(task.id) || task.synthetic) {
+		assertMutableTaskId(task.id);
+		if (task.synthetic) {
 			throw validationError(
 				`Synthetic task ID "${task.id}" cannot be mutated; use the real recurring task UUID`,
 			);
@@ -127,6 +132,11 @@ export function resolveTaskId(
 	const matches = (inventory ?? context?.tasks ?? []).filter((task) =>
 		task.id.toLowerCase().startsWith(identifier.toLowerCase()),
 	);
+	if (matches.length === 1) {
+		const id = matches[0]!.id;
+		assertMutableTaskId(id);
+		return id;
+	}
 	if (matches.length > 1) {
 		throw validationError(
 			`Ambiguous task id prefix "${identifier}" matches ${matches.length} tasks`,
@@ -150,3 +160,5 @@ export function taskTitleFromContext(
 		context?.tasks.find((task) => task.id === taskId)?.title
 	);
 }
+
+

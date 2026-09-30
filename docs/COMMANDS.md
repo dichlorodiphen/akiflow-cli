@@ -61,7 +61,15 @@ af task snooze <task-id> --duration <duration> [--timezone <IANA>] [--fold first
 af task delete <task-id>
 ```
 
-Numeric short IDs come from the latest task list snapshot; use `--snapshot <token>` to pin them. Full UUIDs work without list context.
+Short IDs come from the last `af task list` (including JSON/raw output), against its merged observed + pending view. Full UUIDs work without list context. Virtual recurring instances (`virtual:<uuid>:<date>`) are query expansions only: direct IDs, prefixes, and numeric IDs pointing at them are rejected for mutations. Use the real recurring task UUID.
+
+All task consumers (`task list`, `cal`, `convert`, `slot`, and project counts) use one local repository. Observations come from a pinned cache generation; task reads do not fetch from the API. Run `af refresh` or `af cache refresh` to obtain fresh observations. List metadata resolution and project counts also use local cache data.
+
+Successful task writes are stored as explicit intents in `$AF_CACHE_DIR/pending-tasks.json` (default `~/.cache/af`), atomically under the cache ownership lock. Create/update/plan/snooze/complete/delete, slot task changes, and conversion source deletions immediately affect the next local read. JSON/raw task rows and cleaned calendar task entries include `pending: true`; plain list/calendar/slot/conversion output shows `[pending]`. Conversion JSON items carry the same marker, and project/slot counts annotate the number of pending tasks. Observed-only rows omit that field. Snoozing a timed task moves both its date and scheduled time. Planning with a date and no time clears any previous timed schedule; calendar only displays timed tasks.
+
+Intents never expire by age. The repository applies them in journal order, with later fields superseding earlier fields, and reconciles a task's chain only when observed fields match its final intended state. ID presence or a newer observed version alone is insufficient. Completion remains sticky while sync lags. Newer conflicting observations retain pending fields and emit a warning (`pending_conflict` in task JSON). Delete intents hide rows without changing observations; observed tombstones confirm deletes. A newer task-resource sync proving absence can also confirm deletion of a previously observed task. Explicit tombstone receipts are published in generation token metadata so deletion of an unobserved pending create can be confirmed safely.
+
+Trashed-state policy is **entity retention**: trashed observations stay in the generational cache. Normal list/calendar/conversion/slot/project queries exclude trash; list's explicit `--trashed`, `--status trashed`, `--all`, or `--status all` queries can include it. Deleted tasks are always hidden.
 
 ### Scheduling and timezones
 

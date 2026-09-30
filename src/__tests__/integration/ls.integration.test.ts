@@ -12,6 +12,9 @@ beforeEach(async () => {
 	await server.start();
 	loadAllFixtures(server);
 	env = makeTestEnv(server.url);
+	const refresh = await spawnCli(["refresh", "--rebuild"], { env: env.env });
+	expect(refresh.exitCode).toBe(0);
+	server.requests.length = 0;
 });
 afterEach(async () => {
 	await server.stop();
@@ -68,12 +71,10 @@ describe("af task list (BDD — default behavior)", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
-	test("calls /v5/tasks with Authorization Bearer header", async () => {
+	test("task list reads local observations without fetching tasks", async () => {
 		await spawnCli(["task", "list"], { env: env.env });
-		const tasksReq = server.requests.find(
-			(r) => r.url.pathname === "/v5/tasks",
+		expect(server.requests.some((r) => r.url.pathname === "/v5/tasks")).toBe(
+			false,
 		);
-		expect(tasksReq).toBeDefined();
-		expect(tasksReq?.headers.authorization).toContain("Bearer ");
 	});
 });

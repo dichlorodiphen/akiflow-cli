@@ -11,6 +11,7 @@ Private Bun-native Akiflow CLI with a resource-first command surface.
 - `src/commands/create.ts` contains the shared task, event, and slot creation implementations and payload builders.
 - `src/commands/ls.ts` contains the task list implementation used as `af task list`.
 - `src/commands/do.ts` contains the task completion implementation used as `af task complete`.
+- `src/lib/tasks.ts` is the sole task repository: pinned generational observations plus atomic, locked `pending-tasks.json` intents. Task reads are local; use refresh for observations. Trash is retained and filtered at query time; virtual recurring IDs are query-only and cannot be mutated. Pending rows carry `pending: true` until field confirmation.
 - `src/lib/task-context.ts` resolves full UUIDs without list context and short IDs or prefixes from `last-list.json`.
 
 ## Canonical Commands

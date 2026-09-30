@@ -95,7 +95,13 @@ function eventIntersectsRange(e: Event, from: Date, to: Date): boolean {
 export type TimelineEntry =
 	| { type: "event"; record: Event; start: Date; end: Date | null }
 	| { type: "time_slot"; record: TimeSlot; start: Date; end: Date | null }
-	| { type: "task"; record: Task; start: Date; end: Date | null };
+	| {
+			pending?: true;
+			type: "task";
+			record: Task;
+			start: Date;
+			end: Date | null;
+	  };
 
 /**
  * Merge events, time slots, and tasks-with-datetime into a single
@@ -147,7 +153,13 @@ export function mergeTimeline(
 		const end = t.duration
 			? new Date(start.getTime() + t.duration * 1000)
 			: null;
-		result.push({ type: "task", record: t, start, end });
+		result.push({
+			type: "task",
+			record: t,
+			start,
+			end,
+			...(t.pending ? { pending: true as const } : {}),
+		});
 	}
 
 	result.sort((a, b) => a.start.getTime() - b.start.getTime());

@@ -8,6 +8,8 @@ metadata: {"openclaw":{"emoji":"📋","requires":{"bins":["af"]}}}
 
 Use `af` for Akiflow task and calendar work. Prefer `--json --envelope` for reads and parse the cleaned `result` array. Check `schema_version: 1`, `status`, `errors`, and `warnings`; `meta` carries the snapshot and exit code. Legacy JSON remains default with a stderr migration announcement; `AF_JSON_ENVELOPE=1` opts in globally ahead of the announced default flip. Run `af refresh --json` when the user asks for the latest state or after mutations that need verification. Use mutation `--verify` for field confirmation.
 
+Task reads share one local repository across list, calendar, conversion, slots, and project counts. Run `af refresh` for fresh observations. Successful mutations immediately overlay local reads with `pending: true` in JSON and `[pending]` in plain list/calendar output; pending fields are intent, not observed server confirmation. Intents live in the atomic, locked `pending-tasks.json` journal and never expire by age. Reconciliation requires matching intended fields; completion remains sticky during sync lag, and newer conflicts produce a warning. Delete intents hide tasks until sync confirms deletion. Trashed observations are retained but excluded from normal queries; only explicit list trash/all filters include them.
+
 Dates are local calendar dates. Use explicit `YYYY-MM-DD` in commands and reports. Invalid task-list/cal selectors error rather than broadening the selection or substituting today. Unknown flags/commands and extra positionals fail before auth/cache access (exit 2). Completions are generated from the CLI command tree.
 
 All task/event/slot mutations accept `--dry-run`. Preview first to inspect resolved IDs/titles, normalized before → after values, and notification policy. Previews use the local cache and perform zero writes, authentication, or auto-sync; refresh separately if needed. Batch/convert default to preview; `--execute --dry-run` is rejected. Task plan/snooze/delete support `--json` too.
@@ -98,7 +100,7 @@ af task complete 1 --snapshot <token>
 af task complete <full-uuid>
 ```
 
-Every task list publishes a snapshot (text or `meta.snapshot`) and saves numbered context. Numeric IDs without a pin warn in phase 1; supply `--snapshot <token>` on task complete/update/plan/snooze/delete. `AF_STRICT_IDS=1` requires it now; phase 2 will require tokens by default. Mismatched pins fail already. UUID prefixes use the full cached inventory with an explicit warning, falling back to last-list only when unavailable. Full UUIDs need no context. Synthetic `virtual:<uuid>:<date>` rows are marked and cannot be mutated. Delete only after explicit user confirmation:
+Every task list publishes a snapshot (text or `meta.snapshot`) and saves numbered context. Numeric IDs without a pin warn in phase 1; supply `--snapshot <token>` on task complete/update/plan/snooze/delete. `AF_STRICT_IDS=1` requires it now; phase 2 will require tokens by default. Mismatched pins fail already. Short IDs refer to the last `af task list` (including JSON/raw output) against its merged observed + pending view. UUID prefixes use the full cached inventory with an explicit warning, falling back to last-list only when unavailable. Full UUIDs need no context. Synthetic `virtual:<uuid>:<date>` rows are marked and cannot be mutated; numeric IDs pointing at virtual instances are rejected. Use the real recurring task UUID. Delete only after explicit user confirmation:
 
 ```bash
 af task delete <task-id>

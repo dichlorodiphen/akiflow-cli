@@ -27,6 +27,8 @@ export interface SyncOptions<T extends { id: string }> {
 }
 
 export interface SyncResult {
+	tombstoneIds: string[];
+	upsertedIds: string[];
 	finalToken: string;
 	upsertedCount: number;
 	tombstoneCount: number;
@@ -99,5 +101,12 @@ export async function syncResource<
 	);
 	await rewriteRecords(file, [...kept, ...allUpserts]);
 
-	return { finalToken: token, upsertedCount, tombstoneCount, pages };
+	return {
+		finalToken: token,
+		upsertedCount,
+		tombstoneCount,
+		pages,
+		tombstoneIds: [...tombstoneIds],
+		upsertedIds: [...upsertIds],
+	};
 }

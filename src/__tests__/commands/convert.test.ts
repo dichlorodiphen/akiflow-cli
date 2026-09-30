@@ -1,3 +1,7 @@
+import { isolateTaskCache } from "./task-test-cache";
+
+isolateTaskCache();
+
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

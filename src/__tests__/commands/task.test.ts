@@ -1,3 +1,7 @@
+import { isolateTaskCache } from "./task-test-cache";
+
+isolateTaskCache();
+
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import { taskPlanCommand, taskUpdateCommand } from "../../commands/task/index";
@@ -8,6 +12,8 @@ const mockCredentials = {
 	clientId: "test-client-id-12345",
 	expiryTimestamp: Date.now() + 86400000,
 };
+
+const realReadFileSync = fs.readFileSync;
 
 const mockContextFile = {
 	tasks: [
@@ -27,9 +33,13 @@ describe("taskPlanCommand", () => {
 		loadCredentialsSpy = spyOn(storage, "loadCredentials").mockResolvedValue(
 			mockCredentials,
 		);
-		readFileSyncSpy = spyOn(fs, "readFileSync").mockReturnValue(
-			JSON.stringify(mockContextFile),
-		);
+		readFileSyncSpy = spyOn(fs, "readFileSync").mockImplementation(((
+			path: fs.PathOrFileDescriptor,
+			options: any,
+		) =>
+			String(path).endsWith("last-list.json")
+				? JSON.stringify(mockContextFile)
+				: realReadFileSync(path, options)) as typeof fs.readFileSync);
 	});
 
 	afterEach(() => {

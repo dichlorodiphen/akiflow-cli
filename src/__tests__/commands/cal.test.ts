@@ -1,3 +1,7 @@
+import { isolateTaskCache } from "./task-test-cache";
+
+isolateTaskCache();
+
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { cal } from "../../commands/cal";
 import { createClient } from "../../lib/api/client";

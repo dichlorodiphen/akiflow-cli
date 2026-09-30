@@ -1,7 +1,8 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
 import type { Task } from "../lib/api/types";
-import { syncTasksCache } from "../lib/tasks-local-cache";
+import { readResource } from "../lib/cache";
+import { readTasks } from "../lib/tasks";
 
 function colorizeProjectColor(hexColor: string | null): string {
 	if (!hexColor) {
@@ -24,8 +25,8 @@ const projectListCommand = defineCommand({
 		const client = createClient();
 
 		try {
-			const response = await client.getLabels();
-			const projects = response.data.filter((label) => !label.deleted_at);
+			const labels = await readResource(client, "labels", { cacheOnly: true });
+			const projects = labels.filter((label) => !label.deleted_at);
 
 			if (projects.length === 0) {
 				console.log("No projects found.");
@@ -35,12 +36,15 @@ const projectListCommand = defineCommand({
 			console.log("\nProjects:");
 			console.log("─".repeat(50));
 
-			const { tasks } = await syncTasksCache(client, { quiet: true });
+			const tasks = await readTasks(client);
 
 			for (const project of projects) {
 				const taskCount = countTasksForProjectId(tasks, project.id);
 				const colorIndicator = colorizeProjectColor(project.color);
-				const taskText = taskCount === 1 ? "task" : "tasks";
+				const pendingCount = tasks.filter(
+					(task) => task.listId === project.id && task.pending,
+				).length;
+				const taskText = `${taskCount === 1 ? "task" : "tasks"}${pendingCount ? ` (${pendingCount} pending)` : ""}`;
 				console.log(
 					`${colorIndicator} ${project.title.padEnd(30)} ${taskCount} ${taskText}`,
 				);

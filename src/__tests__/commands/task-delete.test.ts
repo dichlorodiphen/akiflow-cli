@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { taskDeleteCommand } from "../../commands/task";
 import type { Task } from "../../lib/api/types";
 import * as storage from "../../lib/auth/storage";
-import { addPendingTask, loadPendingTasks } from "../../lib/task-cache";
+import { readTasks, recordTaskIntent } from "../../lib/tasks";
 
 const originalAfCacheDir = process.env.AF_CACHE_DIR;
 const taskId = "11111111-2222-4333-8444-555555555555";
@@ -46,14 +46,14 @@ describe("task delete command", () => {
 		else process.env.AF_CACHE_DIR = originalAfCacheDir;
 	});
 
-	it("removes a successfully deleted task from the pending cache", async () => {
-		await addPendingTask({
+	it("hides a successfully deleted task with a retained delete intent", async () => {
+		await recordTaskIntent("create", {
 			id: taskId,
 			title: "Pending temp task",
 			deleted_at: null,
 		} as Task);
 
-		expect(await loadPendingTasks()).toHaveLength(1);
+		expect(await readTasks()).toHaveLength(1);
 
 		await taskDeleteCommand.run?.({
 			args: { id: taskId },
@@ -61,7 +61,7 @@ describe("task delete command", () => {
 		} as unknown as Parameters<NonNullable<typeof taskDeleteCommand.run>>[0]);
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
-		expect(await loadPendingTasks()).toHaveLength(0);
+		expect(await readTasks()).toHaveLength(0);
 		expect(consoleSpy).toHaveBeenCalledWith(
 			`✓ Operation accepted (${taskId}) — submitted, not yet confirmed. Re-run with --verify to confirm.`,
 		);

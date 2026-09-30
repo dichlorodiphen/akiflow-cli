@@ -18,6 +18,7 @@ import {
 	taskMutationOutcome,
 	unknownTaskOutcome,
 } from "../lib/task-mutation-output";
+import { recordTaskIntent } from "../lib/tasks";
 import { verifyFlag } from "../lib/verify-flag";
 
 function collectTaskIds(args: Record<string, unknown>): string[] {
@@ -144,6 +145,14 @@ export const taskCompleteCommand = defineCommand({
 				updatePayloads,
 				args.verify === true,
 			);
+			// Record pending intents for accepted/verified receipts so local
+			// reads reflect the mutation immediately (workstream D).
+			for (const receipt of outcome.receipts) {
+				if (receipt.status === "accepted" || receipt.status === "verified") {
+					const payload = updatePayloads.find((p) => p.id === receipt.id);
+					if (payload) await recordTaskIntent("complete", payload);
+				}
+			}
 			if (failedIds.length > 0) {
 				outcome.ok = false;
 				outcome.errors.push(
