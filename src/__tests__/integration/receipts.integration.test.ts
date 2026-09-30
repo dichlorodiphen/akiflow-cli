@@ -257,6 +257,7 @@ describe("truthful receipts (BDD)", () => {
 			server.respondTo("GET", "/v5/tasks", () => ({
 				success: true,
 				data: [record],
+				sync_token: "test-token",
 				has_next_page: false,
 			}));
 			server.respondTo("PATCH", "/v5/tasks", ({ body }: { body: string }) => {
@@ -264,6 +265,8 @@ describe("truthful receipts (BDD)", () => {
 				record = { ...record, ...payload[0] };
 				return { success: true, data: [record] };
 			});
+			const refreshAgain = await run(["refresh", "--rebuild", "--json"]);
+			expect(refreshAgain.exitCode).toBe(0);
 			const flags =
 				command === "update"
 					? ["--title", "After", "--duration", "30m"]

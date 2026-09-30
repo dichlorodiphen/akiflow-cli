@@ -6,6 +6,7 @@ import { FakeAkiflowServer } from "./helpers/fake-server";
 import { loadAllFixtures } from "./helpers/load-fixtures";
 import { spawnCli } from "./helpers/spawn-cli";
 import { makeTestEnv } from "./helpers/test-env";
+import { eventLifecycle } from "./helpers/event-lifecycle";
 
 const id = "11111111-2222-4333-8444-555555555555";
 let server: FakeAkiflowServer;
@@ -56,6 +57,8 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
+	const lifecycle = eventLifecycle(server);
+	lifecycle.records.length = 0;
 	observed = [task()];
 	server.respondTo("GET", "/v5/tasks", () => ({
 		success: true,
@@ -75,15 +78,6 @@ beforeEach(async () => {
 		message: null,
 		data: JSON.parse(body),
 	}));
-	server.respondTo(
-		"POST",
-		"/v5/event_operations",
-		({ body }: { body: string }) => ({
-			success: true,
-			message: null,
-			data: JSON.parse(body),
-		}),
-	);
 	env = makeTestEnv(server.url);
 	const response = await cli(["refresh", "--rebuild"]);
 	expect(response.exitCode, response.stderr).toBe(0);
@@ -150,7 +144,7 @@ describe("unified repository command regressions", () => {
 			const response = await cli(scenario.args);
 			expect(response.exitCode, response.stderr).toBe(0);
 			const target =
-				scenario.kind === "create" ? JSON.parse(response.stdout).id : id;
+				scenario.kind === "create" ? JSON.parse(response.stdout).result.id : id;
 			const listed = (await list()).find((t) => t.id === target);
 			const calendarRow = (await cal()).find(
 				(t) => (t.record as Record<string, unknown>)?.id === target,
@@ -215,7 +209,7 @@ describe("unified repository command regressions", () => {
 		const rejected = await cli(["task", "complete", String(virtualShortId)]);
 		expect(rejected.exitCode).not.toBe(0);
 		expect(rejected.stderr).toContain(
-			"Virtual recurring instances cannot be mutated",
+			"Synthetic task ID",
 		);
 		expect(existsSync(join(env.cacheDir, "pending-tasks.json"))).toBe(false);
 		const completed = await cli(["task", "complete", id]);
@@ -241,18 +235,18 @@ describe("unified repository command regressions", () => {
 			readFileSync(join(env.cacheDir, "last-list.json"), "utf8"),
 		);
 		const short = context.tasks.find(
-			(t: { id: string }) => t.id === created.id,
+			(t: { id: string }) => t.id === created.result.id,
 		).shortId;
 		const complete = await cli(["task", "complete", String(short)]);
 		expect(complete.exitCode, complete.stderr).toBe(0);
 		for (let i = 0; i < 2; i++) {
-			expect((await list()).find((t) => t.id === created.id)).toMatchObject({
+			expect((await list()).find((t) => t.id === created.result.id)).toMatchObject({
 				done: true,
 				pending: true,
 			});
 			expect(
 				(await cal()).find(
-					(t) => (t.record as Record<string, unknown>)?.id === created.id,
+					(t) => (t.record as Record<string, unknown>)?.id === created.result.id,
 				)?.record,
 			).toMatchObject({ done: true, pending: true });
 		}
@@ -343,7 +337,7 @@ describe("unified repository command regressions", () => {
 				const result = await cli(["task", command, identifier, ...flags]);
 				expect(result.exitCode).not.toBe(0);
 				expect(result.stderr).toContain(
-					"Virtual recurring instances cannot be mutated",
+					"Synthetic task ID",
 				);
 			}
 		}
@@ -362,7 +356,7 @@ describe("unified repository command regressions", () => {
 		]);
 		expect(slot.exitCode).not.toBe(0);
 		expect(slot.stderr).toContain(
-			"Virtual recurring instances cannot be mutated",
+			"Synthetic task ID",
 		);
 		expect(server.requests.filter((r) => r.method !== "GET")).toHaveLength(0);
 		expect(existsSync(join(env.cacheDir, "pending-tasks.json"))).toBe(false);

@@ -15,8 +15,10 @@ describe("platform-config", () => {
 	});
 
 	test("cacheFile composes paths under cachePath", () => {
-		delete process.env.AF_CACHE_DIR;
-		expect(cacheFile("tasks.jsonl")).toBe(`${homedir()}/.cache/af/tasks.jsonl`);
+		// Use an isolated cache dir to avoid interference from the generational
+		// pointer (C) that may exist in the real cache dir.
+		process.env.AF_CACHE_DIR = `/tmp/af-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		expect(cacheFile("tasks.jsonl")).toBe(`${process.env.AF_CACHE_DIR}/tasks.jsonl`);
 	});
 
 	test("respects AF_CACHE_DIR override", () => {
