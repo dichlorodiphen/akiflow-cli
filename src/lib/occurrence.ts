@@ -160,12 +160,17 @@ export function normalizeTask(
 		task.duration && task.duration > 0
 			? new Date(start.getTime() + task.duration * 1000)
 			: null;
-	return {
+	const occurrence = {
 		...base(task, "task", start, end),
 		done: task.done,
 		trashed: task.trashed_at != null,
 		linkage: { taskId: null, timeSlotId: task.time_slot_id ?? null },
 	};
+	// D's pending overlay: propagate task.pending to occurrence provenance
+	if (task.pending) {
+		occurrence.provenance.pending = true;
+	}
+	return occurrence;
 }
 
 /** Pure snapshot query. Hidden-master visibility delegates to the existing rule. */

@@ -158,7 +158,9 @@ describe("unified repository command regressions", () => {
 					...scenario.fields,
 					pending: true,
 				});
-				expect(calendarRow?.pending).toBe(true);
+				expect(
+					(calendarRow as Record<string, unknown>)?.provenance,
+				).toMatchObject({ pending: true });
 				expect((await list(false)).find((t) => t.id === target)?.pending).toBe(
 					true,
 				);
