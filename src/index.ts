@@ -11,8 +11,16 @@ installOutputContract(argv, "af");
 try {
 	const validated = await validateArgv(main, argv);
 	setOutputCommand(validated.command);
-	if (["task list", "cal"].includes(validated.command))
+	if (["task list", "cal", "audit"].includes(validated.command))
 		validateDateSelectors(validated.values);
+	if (
+		validated.command === "slot list" ||
+		validated.command.startsWith("batch ")
+	)
+		validateDateSelectors({
+			...validated.values,
+			to: validated.values.to ?? validated.values.until,
+		});
 } catch (error) {
 	console.error(`Error: ${error instanceof Error ? error.message : error}`);
 	process.exit(EXIT_CODES.validation);

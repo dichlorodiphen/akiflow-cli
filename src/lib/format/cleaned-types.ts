@@ -8,6 +8,7 @@ import type {
 } from "../api/types";
 import { taskStateOf } from "../api/types";
 import { parseLocalDate, startOfDay } from "../date-parser";
+import type { OccurrenceWithRaw } from "../occurrence";
 
 // ============================================================
 // Cleaned JSON shapes — stable contract for --json output
@@ -196,14 +197,28 @@ function isOverdueTask(t: Task): boolean {
 // ============================================================
 
 export function toCleanedCalView(
-	entry: {
-		type: "event" | "time_slot" | "task";
-		record: Event | TimeSlot | Task;
-		start: Date;
-		end: Date | null;
-	},
+	input:
+		| OccurrenceWithRaw
+		| {
+				type: "event" | "time_slot" | "task";
+				record: Event | TimeSlot | Task;
+				start: Date;
+				end: Date | null;
+		  },
 	ctx: ResolveContext,
 ): CleanedCalEntry {
+	const entry =
+		"occurrence" in input
+			? {
+					type:
+						input.occurrence.source === "slot"
+							? "time_slot"
+							: input.occurrence.source,
+					record: input.raw,
+					start: input.occurrence.start,
+					end: input.occurrence.end,
+				}
+			: input;
 	const base = {
 		start: entry.start.toISOString(),
 		end: entry.end?.toISOString() ?? null,

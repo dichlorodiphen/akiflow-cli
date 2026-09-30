@@ -27,15 +27,18 @@ import {
 import {
 	endOfDay,
 	type NamedRange,
-	parseDateBoundary,
 	resolveRange,
-	resolveSingleDayRange,
 	startOfDay,
 } from "../lib/date-parser";
+import {
+	strictBoundarySelector,
+	strictDaySelector,
+} from "../lib/date-selector";
 import { dryRunArgs, mutationReader, previewItem } from "../lib/dry-run";
 import { EXIT_CODES } from "../lib/exit-codes";
 import { filterEvents } from "../lib/filters/event";
 import { outputMutation } from "../lib/mutation-output";
+import { queryOccurrencesWithRaw } from "../lib/occurrence";
 import { classifyExit } from "../lib/output-contract";
 import {
 	type VerificationResult,
@@ -72,7 +75,15 @@ const EVENT_SELECTOR_FLAGS = [
 	"declined",
 ];
 
-const SLOT_SELECTOR_FLAGS = ["date", "from", "until", "calendar", "search"];
+const SLOT_SELECTOR_FLAGS = [
+	"date",
+	"from",
+	"until",
+	"calendar",
+	"account",
+	"connector",
+	"search",
+];
 
 type BatchMode = "dry-run" | "execute";
 type BatchItemAction =
@@ -164,6 +175,8 @@ const eventSelectorArgs = {
 } as const;
 
 const slotSelectorArgs = {
+	account: { type: "string", description: "Akiflow account ID" },
+	connector: { type: "string", description: "Connector ID" },
 	date: { type: "string", description: "Single local date" },
 	from: { type: "string", description: "Start date" },
 	until: { type: "string", description: "End date" },
@@ -239,7 +252,7 @@ function resolveBatchRange(
 	if (namedRange) return resolveRange(namedRange);
 
 	if (dateInput) {
-		const range = resolveSingleDayRange(dateInput);
+		const range = strictDaySelector(dateInput);
 		if (!range) fail(`Could not parse date "${dateInput}"`);
 		return range;
 	}
@@ -247,10 +260,10 @@ function resolveBatchRange(
 	if (!fromInput && !endInput) return null;
 
 	const from = fromInput
-		? parseDateBoundary(fromInput, "start")
+		? strictBoundarySelector(fromInput, "start")
 		: startOfDay(new Date(0));
 	const to = endInput
-		? parseDateBoundary(endInput, "end")
+		? strictBoundarySelector(endInput, "end")
 		: endOfDay(new Date(9999, 11, 31));
 	if (!from) fail(`Could not parse --from "${fromInput}"`);
 	if (!to) fail(`Could not parse --${endFlag} "${endInput}"`);
@@ -296,12 +309,6 @@ function slotMatchesSearch(
 	);
 }
 
-function slotOverlapsRange(slot: TimeSlot, range: BatchDateRange): boolean {
-	const start = new Date(slot.start_time);
-	const end = new Date(slot.end_time);
-	return start <= range.to && end >= range.from;
-}
-
 function byStartThenTitle<
 	T extends { start_time: string | null; title: string | null },
 >(a: T, b: T): number {
@@ -331,16 +338,21 @@ export function selectBatchEvents(
 			.map((calendar) => calendar.id),
 	);
 
-	return filterEvents(events, {
-		from: range?.from,
-		to: range?.to,
-		calendar: calendarId,
-		account: args.account as string | undefined,
-		connector: args.connector as string | undefined,
-		includeDeclined: args.declined === true,
-		activeCalendarIds,
-		visibleCalendarIds,
-	})
+	return queryOccurrencesWithRaw(
+		{ events },
+		{
+			from: range?.from,
+			to: range ? new Date(range.to.getTime() + 1) : undefined,
+			calendarId,
+			accountId: args.account as string | undefined,
+			connectorId: args.connector as string | undefined,
+			includeDeclined: args.declined === true,
+			includeCancelled: true,
+			activeCalendarIds: [...activeCalendarIds],
+			calendarIds: [...visibleCalendarIds],
+		},
+	)
+		.map((pair) => pair.raw as Event)
 		.filter((event) =>
 			eventMatchesSearch(event, args.search as string | undefined),
 		)
@@ -355,10 +367,17 @@ export function selectBatchSlots(
 	const range = resolveBatchRange(args, "until");
 	const calendarId = resolveCalendarId(calendars, args.calendar);
 
-	return slots
-		.filter((slot) => slot.deleted_at == null)
-		.filter((slot) => (range ? slotOverlapsRange(slot, range) : true))
-		.filter((slot) => (calendarId ? slot.calendar_id === calendarId : true))
+	return queryOccurrencesWithRaw(
+		{ slots },
+		{
+			from: range?.from,
+			to: range ? new Date(range.to.getTime() + 1) : undefined,
+			calendarId,
+			accountId: args.account as string | undefined,
+			connectorId: args.connector as string | undefined,
+		},
+	)
+		.map((pair) => pair.raw as TimeSlot)
 		.filter((slot) =>
 			slotMatchesSearch(slot, args.search as string | undefined),
 		)

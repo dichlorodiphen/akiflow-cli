@@ -6,8 +6,10 @@ import type {
 	UpdateTaskPayload,
 	UpdateTimeSlotPayload,
 } from "../lib/api/types";
+import { snapshotResources } from "../lib/cache";
 import {
 	CalendarResolutionError,
+	resolveCalendarFromList,
 	resolveWritableCalendar,
 } from "../lib/calendar";
 import {
@@ -15,10 +17,12 @@ import {
 	formatLocalDate,
 	getLocalTimezone,
 	parseDate,
-	parseDateBoundary,
 	parseTime,
-	resolveSingleDayRange,
 } from "../lib/date-parser";
+import {
+	strictBoundarySelector,
+	strictDaySelector,
+} from "../lib/date-selector";
 import {
 	dryRunArgs,
 	dryRunCalendar,
@@ -27,6 +31,7 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import { attachProvenance, queryOccurrencesWithRaw } from "../lib/occurrence";
 import { isSyntheticTaskId } from "../lib/task-context";
 import {
 	printTaskMutation,
@@ -365,15 +370,6 @@ function slotMatchesSearch(slot: TimeSlot, search: string): boolean {
 	);
 }
 
-function slotOverlapsRange(
-	slot: TimeSlot,
-	range: { from: Date; to: Date },
-): boolean {
-	const start = new Date(slot.start_time);
-	const end = new Date(slot.end_time);
-	return start <= range.to && end >= range.from;
-}
-
 function resolveSlotListRange(
 	args: Record<string, unknown>,
 ): { from: Date; to: Date } | null {
@@ -386,7 +382,7 @@ function resolveSlotListRange(
 	}
 
 	if (dateInput) {
-		const range = resolveSingleDayRange(dateInput);
+		const range = strictDaySelector(dateInput);
 		if (!range) fail(`Could not parse date "${dateInput}"`);
 		return range;
 	}
@@ -395,8 +391,8 @@ function resolveSlotListRange(
 		if (!fromInput || !untilInput) {
 			fail("Use --from and --until together for slot list ranges");
 		}
-		const from = parseDateBoundary(fromInput, "start");
-		const to = parseDateBoundary(untilInput, "end");
+		const from = strictBoundarySelector(fromInput, "start");
+		const to = strictBoundarySelector(untilInput, "end");
 		if (!from) fail(`Could not parse --from "${fromInput}"`);
 		if (!to) fail(`Could not parse --until "${untilInput}"`);
 		if (from > to) fail("--from must be before or equal to --until");
@@ -413,9 +409,14 @@ function selectSlots(
 	const range = resolveSlotListRange(args);
 	const search = args.search as string | undefined;
 
-	return slots
-		.filter((slot) => slot.deleted_at == null)
-		.filter((slot) => (range ? slotOverlapsRange(slot, range) : true))
+	return queryOccurrencesWithRaw(
+		{ slots },
+		{
+			from: range?.from,
+			to: range ? new Date(range.to.getTime() + 1) : undefined,
+		},
+	)
+		.map((pair) => pair.raw as TimeSlot)
 		.filter((slot) => (search ? slotMatchesSearch(slot, search) : true))
 		.sort(
 			(a, b) =>
@@ -460,6 +461,12 @@ export const listSlotCommand = defineCommand({
 		description: "List cached Akiflow task slots",
 	},
 	args: {
+		account: { type: "string", description: "Akiflow account ID" },
+		connector: { type: "string", description: "Connector ID" },
+		calendar: {
+			type: "string",
+			description: "Calendar ID, origin ID, or unique title",
+		},
 		date: {
 			type: "string",
 			description: "Single local date (YYYY-MM-DD or natural language)",
@@ -485,13 +492,39 @@ export const listSlotCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
-		const [slots, tasks] = await Promise.all([
-			mutationReader(args["dry-run"] === true)(client, "time_slots"),
-			mutationReader(args["dry-run"] === true)(client, "tasks"),
+		const snapshot = await snapshotResources(client, [
+			"time_slots",
+			"tasks",
+			"calendars",
 		]);
-		const result = selectSlots(slots, args).map((slot) =>
-			toSlotWithTasks(slot, tasks),
+		const calendarId =
+			args.calendar === undefined
+				? undefined
+				: resolveCalendarFromList(
+						snapshot.data.calendars,
+						String(args.calendar),
+						{ includeDeleted: true, includeHidden: true },
+					).id;
+		const pairs = queryOccurrencesWithRaw(
+			{ slots: snapshot.data.time_slots },
+			{
+				accountId: args.account as string | undefined,
+				connectorId: args.connector as string | undefined,
+				calendarId,
+			},
 		);
+		const observed = attachProvenance(
+			pairs.map((p) => p.occurrence),
+			{
+				observedAt: snapshot.observedAt.time_slots,
+				generation: snapshot.generation,
+			},
+		);
+		const ids = new Set(observed.map((o) => o.id));
+		const result = selectSlots(
+			snapshot.data.time_slots.filter((s) => ids.has(s.id)),
+			args,
+		).map((slot) => toSlotWithTasks(slot, snapshot.data.tasks));
 
 		if (args.json === true) {
 			console.log(JSON.stringify(result, null, 2));

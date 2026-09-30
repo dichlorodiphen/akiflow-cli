@@ -4,7 +4,7 @@ Private Bun-native Akiflow CLI with a resource-first command surface.
 
 ## Structure
 
-- `src/index.ts` registers top-level resources: `task`, `event`, `slot`, `batch`, `convert`, `cal`, `calendar`, `project`, `auth`, `cache`, `doctor`, `refresh`, and `completion`.
+- `src/index.ts` registers top-level resources: `task`, `event`, `slot`, `batch`, `convert`, `cal`, `audit`, `calendar`, `project`, `auth`, `cache`, `doctor`, `refresh`, and `completion`.
 - `src/commands/task/index.ts` exposes `list`, `create`, `complete`, `update`, `plan`, `snooze`, and `delete`.
 - `src/commands/event.ts` exposes `create`, `update`, `delete`, and `attendees add|remove`.
 - `src/commands/slot.ts` exposes `list`, `show`, `create`, `update`, and `delete`.
@@ -77,3 +77,20 @@ The unit preload isolates config/cache, clears endpoint overrides for mocked
 URL assertions, and rejects unmocked external fetches.
 
 Use `bun`, `bunx`, and the existing citty command patterns. Keep command docs, completions, and repo skill docs in sync with the exposed CLI surface.
+
+## Occurrence reads
+
+`cal` and `audit` query one pinned generation through `snapshotResources` and
+`queryOccurrencesWithRaw`. Identity filters apply to all sources; calendar
+visibility preserves hidden-master rules and excludes deleted calendars.
+`cal --summary` includes unioned window capacity as `busy_minutes`; `cal --free`
+uses all selected sources and supports `--min-duration`. Raw/summary naming is
+`slot`; cleaned JSON retains its established `time_slot` type. Slot list and
+batch slot selectors accept account/connector/calendar filters. Batch preview
+readers remain local and never auto-refresh.
+
+`af audit --date YYYY-MM-DD --json` emits schema version 1 with audit metadata
+and a review envelope. Echo suggestions never suppress records; linked events
+own time, and native tasks without provider IDs never echo-group. Occurrence
+provenance uses resource fetch time and generation; `pending: false` is reserved
+for D. The legacy task-list pending helper is separate from occurrence snapshots.

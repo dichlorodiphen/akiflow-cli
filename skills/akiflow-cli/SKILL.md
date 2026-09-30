@@ -123,3 +123,24 @@ Mutation JSON is a receipt envelope with `schema_version: 1`, `command`, `status
 Add `--verify` to event create/update/delete and event attendees add/remove, task create/update/plan/snooze/complete/delete, slot create, batch events mutations, and executed task-to-event conversions when confirmation is needed. Verification uses fresh Akiflow reads, compares requested fields and time/zone, and defaults to a 15-second timeout. `verified` confirms observed Akiflow state, not provider state. Timeout claims no success. Never automatically rerun a write after an unknown outcome; inspect fresh records first.
 
 Conversion with `--delete-source` verifies every target before deleting any source. If one target is unverified, all sources remain and the command exits non-zero. Preview remains the default.
+
+Occurrence reads: `af cal` pins one generation for events/slots/tasks/calendars;
+account/connector/calendar filters apply across sources. Linked constituents remain
+visible, while event > slot > task ownership determines capacity. `--summary`
+includes unioned, window-clipped `busy_minutes` and `{event, slot, task}` counts.
+Raw/summary source naming is `slot`; cleaned JSON retains `time_slot` and existing
+fields. `--free [--min-duration 30m]` returns free windows across the selected
+sources and date range, defaulting to today. `slot list` and batch slot selection
+accept `--account`, `--connector`, and `--calendar`.
+
+Use `af audit --date YYYY-MM-DD --json` to review FETCH/COVERAGE/DISCREPANCIES/EFFECTIVE.
+It accepts today/tomorrow/date/from/to, account/connector/calendar, and min-duration.
+JSON contains `{schema_version: 1, audit, envelope}`; universal `--envelope` is
+also supported. The review envelope includes generated_at, timezone, generation
+and oldest observed_at, effective occurrences, busy minutes, free windows and warnings.
+Echo canonical suggestions prefer provider origin_id, then earliest start; no
+automatic echo suppression. Explicit linked event owner overrides and divergent
+times remain visible. Native tasks without provider origin_id never echo-group.
+Occurrence `pending: false` is reserved for D; the legacy task-list pending helper
+is not integrated into calendar/audit snapshots. These commands are reads and may
+auto-refresh; they do not need `--dry-run`.
