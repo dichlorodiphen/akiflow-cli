@@ -1,13 +1,31 @@
 /// <reference types="bun" />
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	setSystemTime,
+	spyOn,
+} from "bun:test";
 import * as fs from "node:fs/promises";
 import { getTaskDisplayTitle, lsCommand } from "../../commands/ls";
 import { AkiflowClient } from "../../lib/api/client";
 import type { Task } from "../../lib/api/types";
+import { makeTestEnv } from "../integration/helpers/test-env";
+
+let testEnv: ReturnType<typeof makeTestEnv>;
+let savedEnv: Record<string, string | undefined>;
 
 let readFileMock: ReturnType<typeof spyOn> | null = null;
 
 beforeEach(() => {
+	setSystemTime(today);
+	testEnv = makeTestEnv("http://127.0.0.1:1");
+	savedEnv = Object.fromEntries(
+		Object.keys(testEnv.env).map((key) => [key, process.env[key]]),
+	);
+	Object.assign(process.env, testEnv.env);
 	// Prevent tests from reading the real ~/.cache/af tasks cache
 	// (which can make tests non-deterministic and hit the real API).
 	readFileMock = spyOn(fs, "readFile").mockRejectedValue(new Error("no cache"));
@@ -16,16 +34,28 @@ beforeEach(() => {
 afterEach(() => {
 	readFileMock?.mockRestore();
 	readFileMock = null;
+	setSystemTime();
+	testEnv.cleanup();
+	for (const [key, value] of Object.entries(savedEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
 });
 
-const today = new Date();
-const todayDateString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-const tomorrow = new Date(today);
-tomorrow.setDate(tomorrow.getDate() + 1);
-const tomorrowDateString = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
-
-const weekdayMap = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
-const todayByday = weekdayMap[today.getDay()]!;
+// Fixed local noon keeps the command's "today" and the RRULE anchor on
+// Wednesday in every host timezone, regardless of the actual run date.
+const today = new Date(2026, 8, 30, 12);
+const todayDateString = "2026-09-30";
+const tomorrowDateString = "2026-10-01";
+const todayByday = "WE";
+// rrule checks weekdays in UTC while the CLI filters local days. Choose an
+// anchor that is Wednesday in both calendars, including UTC+14 and UTC-12.
+const recurrenceAnchor = new Date(
+	2026,
+	8,
+	30,
+	Math.max(0, Math.min(23, Math.floor(12 - today.getTimezoneOffset() / 60))),
+).toISOString();
 
 const mockTasks: Task[] = [
 	{
@@ -347,6 +377,8 @@ describe("ls command", () => {
 			...mockTasks[0]!,
 			id: "recurring-master-1",
 			title: "General 작성",
+			// Anchor within the fixed Wednesday in both UTC and local time.
+			original_datetime: recurrenceAnchor,
 			date: null,
 			recurring_id: null,
 			recurrence: `RRULE:FREQ=WEEKLY;BYDAY=${todayByday}`,
@@ -394,6 +426,7 @@ describe("ls command", () => {
 			...mockTasks[0]!,
 			id: "recurring-master-2",
 			title: "General 작성",
+			original_datetime: recurrenceAnchor,
 			date: null,
 			recurring_id: null,
 			recurrence: `RRULE:FREQ=WEEKLY;BYDAY=${todayByday}`,

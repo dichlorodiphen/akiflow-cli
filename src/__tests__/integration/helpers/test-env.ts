@@ -50,6 +50,7 @@ export function makeTestEnv(apiBase: string): TestEnv {
 		credentialsPath,
 		env: {
 			AF_API_BASE: apiBase,
+			AF_REFRESH_URL: `${apiBase}/oauth/refreshToken`,
 			AF_CACHE_DIR: cacheDir,
 			AF_CONFIG_DIR: afConfigDir,
 			AF_NO_AUTO_SYNC: "1",

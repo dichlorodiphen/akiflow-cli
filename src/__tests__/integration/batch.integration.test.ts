@@ -11,14 +11,7 @@ beforeEach(async () => {
 	server = new FakeAkiflowServer();
 	await server.start();
 	loadAllFixtures(server);
-	server.respondTo("POST", "/v5/event_operations", (req: { body: string }) => {
-		const payload = JSON.parse(req.body);
-		return {
-			success: true,
-			message: null,
-			data: payload,
-		};
-	});
+
 	server.respondTo("POST", "/v3/events/modifiers", (req: { body: string }) => {
 		const payload = JSON.parse(req.body);
 		return {

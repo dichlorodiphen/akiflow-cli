@@ -55,11 +55,13 @@
 		"build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/af-linux-x64",
 		"build:linux-arm64": "bun build src/index.ts --compile --target=bun-linux-arm64 --outfile dist/af-linux-arm64",
 		"test": "bun run test:unit && bun run test:integration",
-		"test:unit": "bun test --test-name-pattern='^(?!.*BDD).*$' src/__tests__/api src/__tests__/auth src/__tests__/commands src/__tests__/lib src/__tests__/setup.test.ts",
+		"test:unit": "bun test --preload ./scripts/unit-preload.ts --test-name-pattern='^(?!.*BDD).*$' src/__tests__/api src/__tests__/auth src/__tests__/commands src/__tests__/lib src/__tests__/setup.test.ts src/__tests__/version.test.ts",
 		"test:integration": "bun test src/__tests__/integration",
-		"lint": "bunx biome check --reporter=summary .",
-		"format": "bunx biome check --write .",
-		"typecheck": "bunx tsc --noEmit",
+		"test:ci": "bun run typecheck && bun run lint && bun run test:unit && bun run test:integration",
+		"test:smoke": "bun run scripts/compiled-smoke.ts",
+		"lint": "bun x --no-install biome check --reporter=summary .",
+		"format": "bun x --no-install biome check --write .",
+		"typecheck": "bun x --no-install tsc --noEmit",
 		"prepublishOnly": "echo 'This package requires Bun runtime. Install with: bun install -g akiflow-cli'"
 	}
 }

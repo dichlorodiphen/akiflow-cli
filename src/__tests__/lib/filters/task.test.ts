@@ -79,8 +79,8 @@ describe("filterTasks — date ranges", () => {
 			task({ id: "after", date: "2026-05-22" }),
 		];
 		const result = filterTasks(tasks, {
-			from: new Date("2026-05-21"),
-			to: new Date("2026-05-21"),
+			from: new Date(2026, 4, 21),
+			to: new Date(2026, 4, 21),
 		});
 		expect(result.map((t) => t.id)).toEqual(["in"]);
 	});

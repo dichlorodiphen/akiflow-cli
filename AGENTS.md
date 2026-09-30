@@ -57,7 +57,19 @@ Use the resource-first replacements instead: `af task create`, `af task list`, `
 ```bash
 bun run typecheck
 bun run lint
-AF_CACHE_DIR=/private/tmp/af-test-cache bun run test
+bun run test:unit # includes src/__tests__/version.test.ts
+bun run test:integration
+bun run test:ci # typecheck + non-writing lint + both full test suites
+bun run test:smoke # compile to a temp path and check the standalone binary
 ```
+
+For isolated full-suite verification, set `AF_CONFIG_DIR` and `AF_CACHE_DIR` to
+fresh temporary directories, `AF_API_BASE=http://127.0.0.1:1`,
+`AF_REFRESH_URL=http://127.0.0.1:1/oauth/refreshToken`, and `AF_NO_AUTO_SYNC=1`.
+Run `bun run test:ci` under both `TZ=UTC` and `TZ=America/Los_Angeles`, as CI does.
+`bun run test` remains the combined unit and integration target. The lint and
+typecheck scripts use `bun x --no-install` so checks use installed dependencies.
+The unit preload isolates config/cache, clears endpoint overrides for mocked
+URL assertions, and rejects unmocked external fetches.
 
 Use `bun`, `bunx`, and the existing citty command patterns. Keep command docs, completions, and repo skill docs in sync with the exposed CLI surface.
