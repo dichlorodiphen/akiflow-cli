@@ -145,6 +145,7 @@ describe("auth command", () => {
 			);
 
 			loadCredentialsSpy.mockRestore();
+			consoleLogSpy.mockRestore();
 		});
 
 		// given
@@ -176,6 +177,7 @@ describe("auth command", () => {
 			);
 
 			loadCredentialsSpy.mockRestore();
+			consoleLogSpy.mockRestore();
 		});
 	});
 
@@ -211,6 +213,7 @@ describe("auth command", () => {
 			);
 
 			loadCredentialsSpy.mockRestore();
+			consoleLogSpy.mockRestore();
 			clearCredentialsSpy.mockRestore();
 		});
 
@@ -234,6 +237,7 @@ describe("auth command", () => {
 			);
 
 			loadCredentialsSpy.mockRestore();
+			consoleLogSpy.mockRestore();
 		});
 	});
 
@@ -259,6 +263,7 @@ describe("auth command", () => {
 				);
 
 				scanBrowsersSpy.mockRestore();
+				consoleLogSpy.mockRestore();
 			},
 		);
 	});
