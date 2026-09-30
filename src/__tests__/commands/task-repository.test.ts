@@ -90,7 +90,7 @@ describe("task mutation repository write-through", () => {
 			name: "date-only plan",
 			command: taskPlanCommand,
 			args: { id, date: "2026-05-22" },
-			fields: { datetime: null, datetime_tz: null, date: "2026-05-22" },
+			fields: { datetime: "2026-05-22T09:00:00.000Z", datetime_tz: "UTC", date: "2026-05-22" },
 		},
 		{
 			name: "snooze",
