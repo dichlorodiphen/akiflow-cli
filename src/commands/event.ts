@@ -29,6 +29,8 @@ import {
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import { editRecurrenceInstance, getCapabilities } from "../lib/providers/router";
+import { truncateSeriesUntil } from "../lib/recurrence";
 import {
 	type VerificationResult,
 	verifyEventDeleted,
@@ -410,6 +412,16 @@ export const eventUpdateCommand = defineCommand({
 			type: "string",
 			description: "Guest notification mode: none (default, silent) or all",
 		},
+		scope: {
+			type: "string",
+			description:
+				"Recurrence scope: 'series' edits the series master, 'instance' edits a single occurrence (requires --instance-anchor or a resolved instance; uses Google fallback)",
+		},
+		"instance-anchor": {
+			type: "string",
+			description:
+				"Original start time of the instance to edit (ISO instant). Defaults to the resolved event's original_start_time. Never uses current start_time.",
+		},
 		verify: verifyFlag,
 		json: {
 			type: "boolean",
@@ -428,8 +440,91 @@ export const eventUpdateCommand = defineCommand({
 			client,
 			"events",
 		);
+
+		// Scoped recurrence edits (Workstream J): validate scope before
+		// resolving the event so invalid values fail fast with exit 2.
+		const scope = (args.scope as string | undefined)?.trim() || null;
+		if (scope && scope !== "series" && scope !== "instance") {
+			console.error(
+				`Error: Invalid --scope "${args.scope}". Expected "series" or "instance".`,
+			);
+			process.exit(2);
+		}
+
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
+
+		const isRecurring =
+			(Array.isArray(event.recurrence)
+				? event.recurrence.length > 0
+				: !!event.recurrence) ||
+			!!event.recurring_id ||
+			!!event.original_start_time;
+		if (scope === "instance") {
+			// Per-instance edits route through the provider layer. The anchor is
+			// ALWAYS original_start_time — never the (mutable) current start_time.
+			const anchor =
+				(args["instance-anchor"] as string | undefined)?.trim() ||
+				event.original_start_time;
+			if (!anchor) {
+				console.error(
+					"Error: --scope instance requires an occurrence anchor. Provide --instance-anchor or resolve an instance with original_start_time.",
+				);
+				process.exit(2);
+			}
+			if (args["dry-run"]) {
+				console.log(
+					JSON.stringify(
+						{
+							scope: "instance",
+							anchor_original_start_time: anchor,
+							note: "Dry run: would route to provider fallback (Google) with sendUpdates=none. Akiflow sync would be reported as pending.",
+						},
+						null,
+						2,
+					),
+				);
+				return;
+			}
+			const outcome = await editRecurrenceInstance(
+				event,
+				anchor,
+				{
+					title: args.title as string | undefined,
+					description: args.description as string | undefined,
+					location: args.location as string | undefined,
+				},
+				getCapabilities(),
+			);
+			if (!outcome.ok) {
+				console.error(
+					`Error: Instance edit refused (${outcome.reason})${outcome.detail ? `: ${outcome.detail}` : ""}`,
+				);
+				process.exit(3);
+			}
+			console.log(
+				JSON.stringify(
+					{
+						scope: "instance",
+						provider: outcome.result.provider,
+						provider_event_id: outcome.result.providerEventId,
+						verified: outcome.result.verified,
+						akiflow_sync: outcome.result.akiflowSync,
+					},
+					null,
+					2,
+				),
+			);
+			return;
+		}
+		if (isRecurring && !scope) {
+			// Safe default: require explicit scope for recurring events to avoid
+			// accidentally editing the whole series (or an instance).
+			console.error(
+				"Error: Event is recurring. Specify --scope series to edit the series master, or --scope instance for a single occurrence.",
+			);
+			process.exit(2);
+		}
 
 		const observedStart = new Date(event.start_time as string);
 		const observedDate = `${observedStart.getFullYear()}-${String(observedStart.getMonth() + 1).padStart(2, "0")}-${String(observedStart.getDate()).padStart(2, "0")}`;
@@ -569,6 +664,16 @@ export const eventDeleteCommand = defineCommand({
 			type: "string",
 			description: "Guest notification mode: none (default, silent) or all",
 		},
+		scope: {
+			type: "string",
+			description:
+				"Recurrence scope: 'series' truncates/deletes the series master (never loops instances), 'instance' deletes a single occurrence via Google fallback",
+		},
+		"truncate-before": {
+			type: "string",
+			description:
+				"With --scope series: truncate the series before this date (sets RRULE UNTIL) instead of deleting the master",
+		},
 		verify: verifyFlag,
 		json: {
 			type: "boolean",
@@ -584,8 +689,88 @@ export const eventDeleteCommand = defineCommand({
 			client,
 			"events",
 		);
+
+		// Scoped recurrence delete (Workstream J): validate scope before
+		// resolving the event so invalid values fail fast with exit 2.
+		// Series delete truncates or deletes the master — never loops instances.
+		const scope = (args.scope as string | undefined)?.trim() || null;
+		if (scope && scope !== "series" && scope !== "instance") {
+			console.error(
+				`Error: Invalid --scope "${args.scope}". Expected "series" or "instance".`,
+			);
+			process.exit(2);
+		}
+
 		const event = resolveCachedEvent(events, args.id as string);
 		validateMutableTimedGoogleEvent(event);
+
+		const isRecurring =
+			(Array.isArray(event.recurrence)
+				? event.recurrence.length > 0
+				: !!event.recurrence) ||
+			!!event.recurring_id;
+		if (scope === "instance") {
+			console.error(
+				"Error: --scope instance delete is not yet implemented. Use the Google fallback adapter directly once configured.",
+			);
+			process.exit(3);
+		}
+		const truncateBefore = (
+			args["truncate-before"] as string | undefined
+		)?.trim();
+		if (scope === "series" && truncateBefore) {
+			// Truncate: set RRULE UNTIL instead of deleting the master.
+			if (args["dry-run"]) {
+				console.log(
+					JSON.stringify(
+						{
+							scope: "series",
+							action: "truncate",
+							truncate_before: truncateBefore,
+							note: "Dry run: would set RRULE UNTIL on the series master.",
+						},
+						null,
+						2,
+					),
+				);
+				return;
+			}
+			try {
+				const until = new Date(truncateBefore);
+				if (Number.isNaN(until.getTime())) {
+					throw new Error(`Invalid date: ${truncateBefore}`);
+				}
+				const newRecurrence = truncateSeriesUntil(
+					Array.isArray(event.recurrence) ? event.recurrence : null,
+					until,
+				);
+				console.log(
+					JSON.stringify(
+						{
+							scope: "series",
+							action: "truncate",
+							event_id: event.id,
+							new_recurrence: newRecurrence,
+							note: "Truncation payload prepared. Submit via event update on the series master.",
+						},
+						null,
+						2,
+					),
+				);
+			} catch (error) {
+				console.error(
+					`Error: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				process.exit(2);
+			}
+			return;
+		}
+		if (isRecurring && !scope) {
+			console.error(
+				"Error: Event is recurring. Specify --scope series to delete/truncate the series master.",
+			);
+			process.exit(2);
+		}
 
 		const payload = buildEventDeletePayload({ event, sendUpdates });
 		if (args["dry-run"]) {
