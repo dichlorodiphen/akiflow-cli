@@ -93,7 +93,15 @@ describe("af event (BDD)", () => {
 		expect(refresh.exitCode).toBe(0);
 
 		const result = await spawnCli(
-			["event", "delete", "event-meeting-1", "--send-updates", "all", "--json"],
+			[
+				"event",
+				"delete",
+				"event-meeting-1",
+				"--send-updates",
+				"all",
+				"--confirm",
+				"--json",
+			],
 			{ env: testEnv },
 		);
 

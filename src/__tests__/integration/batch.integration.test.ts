@@ -169,6 +169,7 @@ describe("af batch (BDD)", () => {
 				"Standup",
 				"--send-updates",
 				"none",
+				"--confirm",
 				"--execute",
 				"--json",
 			],

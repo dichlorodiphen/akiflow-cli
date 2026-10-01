@@ -46,7 +46,7 @@ describe("truthful receipts (BDD)", () => {
 	for (const args of [
 		create,
 		["event", "update", "event-meeting-1", "--title", "Changed"],
-		["event", "delete", "event-meeting-1"],
+		["event", "delete", "event-meeting-1", "--confirm"],
 	]) {
 		test(`${args.slice(0, 2).join(" ")} distinguishes acceptance from confirmation`, async () => {
 			const result = await run(args);
@@ -168,6 +168,7 @@ describe("truthful receipts (BDD)", () => {
 			"delete",
 			"--search",
 			"Standup",
+			"--confirm",
 			"--execute",
 			"--json",
 		]);
