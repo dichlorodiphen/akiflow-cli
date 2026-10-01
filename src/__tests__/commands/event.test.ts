@@ -16,6 +16,7 @@ import {
 import type { Event } from "../../lib/api/types";
 import * as storage from "../../lib/auth/storage";
 import * as cache from "../../lib/cache";
+import { recordCreatedEvent } from "../../lib/event-creation-journal";
 import { expectReceiptOnlyCommandFailure } from "../helpers/receipt-only-command";
 
 const mockCredentials = {
@@ -328,6 +329,13 @@ describe("event command", () => {
 
 	it("deletes a cached event through /v5/event_operations and stays silent by default", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
+		// The fixture event is CLI-created, so the delete-propagation guard
+		// does not demand --confirm.
+		recordCreatedEvent({
+			event_id: "event-123456",
+			created_at: "2026-06-20T00:00:00.000Z",
+			provenance: { title: "Portland trip: flight", calendar_id: "cal-123" },
+		});
 		fetchSpy.mockResolvedValueOnce(
 			new Response(
 				JSON.stringify({
@@ -394,6 +402,9 @@ describe("event command", () => {
 					id: "event-123456",
 					"send-updates": "none",
 					json: true,
+					// Explicit confirmation: this fixture event is not in the
+					// creation journal, exercising the --confirm override path.
+					confirm: true,
 					_: [],
 				},
 				rawArgs: [],
@@ -408,6 +419,38 @@ describe("event command", () => {
 		expect(envelope.result).toBeNull();
 
 		consoleLogSpy.mockRestore();
+	});
+
+	it("refuses to delete an event the CLI did not create without --confirm", async () => {
+		const consoleErrorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("guard exit");
+		});
+		// A foreign event id no other test journals (the journal is shared
+		// across this unit run, so it must not collide with "event-123456").
+		readResourceSpy.mockResolvedValueOnce([
+			event({ id: "event-foreign-999", title: "Someone else's block" }),
+		] as any);
+
+		await expect(
+			eventDeleteCommand.run!({
+				args: { id: "event-foreign-999", _: [] },
+				rawArgs: [],
+			} as any),
+		).rejects.toThrow("guard exit");
+
+		expect(consoleErrorSpy).toHaveBeenCalledWith(
+			expect.stringContaining("was not created by this CLI"),
+		);
+		expect(consoleErrorSpy).toHaveBeenCalledWith(
+			expect.stringContaining("--confirm"),
+		);
+		// The delete must never reach the Akiflow server.
+		expect(fetchSpy).not.toHaveBeenCalled();
+
+		consoleErrorSpy.mockRestore();
+		exitSpy.mockRestore();
+		process.exitCode = 0;
 	});
 
 	it("reads update descriptions from a file without shell expansion", async () => {

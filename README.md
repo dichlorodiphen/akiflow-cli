@@ -71,12 +71,13 @@ af event update <event-id> --date 2026-06-20 --at 14:30 --duration 45m \
 
 af event delete <event-id>
 af event delete <event-id> --notify none
+af event delete <event-id> --confirm   # required when the event was not created by this CLI
 
 af event attendees add <event-id> julia@example.com alex@example.com
 af event attendees remove <event-id> julia@example.com
 ```
 
-Event v1 supports cached, timed, non-recurring, writable Google Calendar events only. Create, update, and delete use Akiflow's asynchronous v5 event-operations API. It does not support recurrence, all-day events, reminders, or conferencing. Deletes send Google update notifications through Akiflow by default; use `af event delete --notify none` for disposable cleanup. The attendee subcommands remain exposed for compatibility, but Akiflow has deprecated their captured v3 modifier endpoint and their v5 replacement is not yet implemented.
+Event v1 supports cached, timed, non-recurring, writable Google Calendar events only. Create, update, and delete use Akiflow's asynchronous v5 event-operations API. It does not support recurrence, all-day events, reminders, or conferencing. Deletes send Google update notifications through Akiflow by default; use `af event delete --notify none` for disposable cleanup. Deleting an event this CLI did not create requires `--confirm` (the Akiflow server propagates deletes to Google Calendar, so the CLI keeps a creation journal of its own events and refuses foreign targets without explicit confirmation). The attendee subcommands remain exposed for compatibility, but Akiflow has deprecated their captured v3 modifier endpoint and their v5 replacement is not yet implemented.
 
 ### Batch Operations
 

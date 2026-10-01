@@ -78,6 +78,7 @@ describe("batch command helpers", () => {
 				event({ id: "accepted" }),
 			],
 			"none",
+			{ createdEventIds: new Set(["failed", "unmentioned", "accepted"]) },
 		);
 		const classified = classifyBatchResults(planned, {
 			success: false,
@@ -232,7 +233,9 @@ describe("batch command helpers", () => {
 	});
 
 	it("builds explicit delete operations with silent notification policy", () => {
-		const planned = planEventDeleteBatch([event()], "none");
+		const planned = planEventDeleteBatch([event()], "none", {
+			createdEventIds: new Set(["event-123"]),
+		});
 
 		expect(planned[0]?.action).toBe("change");
 		expect(planned[0]?.payload).toEqual(
@@ -305,5 +308,45 @@ describe("batch command helpers", () => {
 			skipped: 1,
 			failed: 0,
 		});
+	});
+
+	it("skips delete targets this CLI did not create unless --confirm", () => {
+		const foreign = event({ id: "foreign-1", title: "Someone else's block" });
+		const own = event({ id: "own-1", title: "My CLI block" });
+
+		const planned = planEventDeleteBatch([foreign, own], "none", {
+			createdEventIds: new Set(["own-1"]),
+		});
+
+		expect(planned[0]?.action).toBe("skip");
+		expect(planned[0]?.reason).toMatch(/not created by this CLI/);
+		expect(planned[0]?.reason).toMatch(/--confirm/);
+		expect(planned[0]?.payload).toBeUndefined();
+		expect(planned[1]?.action).toBe("change");
+		expect(planned[1]?.payload).toEqual(
+			expect.objectContaining({ operation: "delete", event_id: "own-1" }),
+		);
+	});
+
+	it("plans deletes for foreign events when confirm is true", () => {
+		const planned = planEventDeleteBatch([event({ id: "foreign-1" })], "none", {
+			confirm: true,
+			createdEventIds: new Set(),
+		});
+
+		expect(planned[0]?.action).toBe("change");
+		expect(planned[0]?.payload).toEqual(
+			expect.objectContaining({ operation: "delete", event_id: "foreign-1" }),
+		);
+	});
+
+	it("keeps mutability skips ahead of the provenance guard", () => {
+		const readonlyEvent = event({ id: "ro-1", read_only: true });
+		const planned = planEventDeleteBatch([readonlyEvent], "none", {
+			createdEventIds: new Set(),
+		});
+
+		expect(planned[0]?.action).toBe("skip");
+		expect(planned[0]?.reason).toBe("event is read-only");
 	});
 });

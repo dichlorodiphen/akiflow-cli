@@ -35,6 +35,11 @@ import {
 	strictDaySelector,
 } from "../lib/date-selector";
 import { dryRunArgs, mutationReader, previewItem } from "../lib/dry-run";
+import {
+	clearCreatedEvent,
+	deleteNeedsConfirmation,
+	loadCreatedEventIds,
+} from "../lib/event-creation-journal";
 import { EXIT_CODES } from "../lib/exit-codes";
 import { filterEvents } from "../lib/filters/event";
 import { outputMutation } from "../lib/mutation-output";
@@ -490,11 +495,31 @@ export function planEventAttendeeBatch(
 export function planEventDeleteBatch(
 	events: Event[],
 	sendUpdates: EventSendUpdates = "none",
+	options: {
+		/** Explicit user confirmation; skips the creation-journal guard. */
+		confirm?: boolean;
+		/** IDs this CLI created (from the creation journal); others need --confirm. */
+		createdEventIds?: ReadonlySet<string>;
+	} = {},
 ): Array<PlannedBatchItem<EventOperationPayload>> {
 	return events.map((event, index) => {
 		const item = baseEventItem(event);
 		const skipReason = mutableTimedGoogleEventSkipReason(event);
 		if (skipReason) return { ...item, action: "skip", reason: skipReason };
+		// Delete-propagation guard: a submitted delete is fanned out to
+		// Google Calendar by the Akiflow server, so targets this CLI did not
+		// create require explicit confirmation (2026-09-26 "tilapia" shape).
+		if (
+			!options.confirm &&
+			deleteNeedsConfirmation(event.id, options.createdEventIds ?? new Set())
+		) {
+			return {
+				...item,
+				action: "skip",
+				reason:
+					"not created by this CLI; re-run with --confirm to delete (deleting cancels the event on Google Calendar)",
+			};
+		}
 		return {
 			...item,
 			action: "change",
@@ -881,7 +906,10 @@ async function runBatchEventDelete(
 		mutationReader(args.execute !== true)(client, "calendars"),
 	]);
 	const selected = selectBatchEvents(events, calendars, args);
-	let planned = planEventDeleteBatch(selected, sendUpdates);
+	let planned = planEventDeleteBatch(selected, sendUpdates, {
+		confirm: args.confirm === true,
+		createdEventIds: loadCreatedEventIds(),
+	});
 	const operation = "events.delete";
 	const execute = args.execute === true;
 	const json = args.json === true;
@@ -904,6 +932,12 @@ async function runBatchEventDelete(
 	const response = await client.submitEventOperations(
 		changes.map((item) => item.payload),
 	);
+	// Drop journal entries for deleted events so the guard stays accurate.
+	for (const receipt of response.receipts) {
+		if (receipt.status === "accepted") {
+			clearCreatedEvent(receipt.event_id);
+		}
+	}
 	const verifications = new Map<string, VerificationResult<Event>>();
 	if (args.verify === true) {
 		for (const receipt of response.receipts) {
@@ -1084,6 +1118,11 @@ const batchEventDeleteCommand = defineCommand({
 		"send-updates": {
 			type: "string",
 			description: "Guest notification mode: none (default, silent) or all",
+		},
+		confirm: {
+			type: "boolean",
+			description:
+				"Confirm deletion of events this CLI did not create (required for targets absent from the CLI's creation journal)",
 		},
 		...executionArgs,
 	},

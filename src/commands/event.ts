@@ -28,6 +28,11 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import {
+	clearCreatedEvent,
+	deleteNeedsConfirmation,
+	loadCreatedEventIds,
+} from "../lib/event-creation-journal";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { editRecurrenceInstance, getCapabilities } from "../lib/providers/router";
 import { truncateSeriesUntil } from "../lib/recurrence";
@@ -739,6 +744,11 @@ export const eventDeleteCommand = defineCommand({
 			type: "string",
 			description: "Guest notification mode: none (default, silent) or all",
 		},
+		confirm: {
+			type: "boolean",
+			description:
+				"Confirm deletion of an event this CLI did not create (required when the event is absent from the CLI's creation journal)",
+		},
 		scope: {
 			type: "string",
 			description:
@@ -855,6 +865,18 @@ export const eventDeleteCommand = defineCommand({
 			);
 			return;
 		}
+		// Delete-propagation guard: the Akiflow server fans a submitted delete
+		// out to Google Calendar, cancelling the event for everyone. Refuse to
+		// cancel an event this CLI did not create unless the user explicitly
+		// confirms — this is the 2026-09-26 "tilapia" shape, where a delete
+		// could otherwise reach a Google-side event the CLI never made.
+		const confirmed = args.confirm === true;
+		if (!confirmed && deleteNeedsConfirmation(event.id, loadCreatedEventIds())) {
+			fail(
+				`Event "${event.id}" ("${event.title ?? "untitled"}") was not created by this CLI. ` +
+					`Deleting it cancels the event on Google Calendar. Re-run with --confirm to proceed.`,
+			);
+		}
 		// Explicit delete intent: the operation kind is fixed here, never
 		// inferred from the payload's status/deleted_at fields.
 		const operation = buildDeleteEventOperation(
@@ -863,6 +885,9 @@ export const eventDeleteCommand = defineCommand({
 		);
 		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
+		if (receipt && receipt.status === "accepted") {
+			clearCreatedEvent(event.id);
+		}
 		const verifications = new Map<string, VerificationResult<Event>>();
 		if (receipt?.status === "accepted" && args.verify === true) {
 			const verification = await verifyEventDeleted(
