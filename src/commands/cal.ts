@@ -5,7 +5,9 @@ import { CalendarResolutionError } from "../lib/calendar";
 import { formatLocalDate, parseLocalDate } from "../lib/date-parser";
 import {
 	detectDuplicateEvents,
+	detectPossibleReshapes,
 	formatDuplicateWarnings,
+	formatReshapeWarnings,
 } from "../lib/event-duplicates";
 import { EXIT_CODES, UsageError } from "../lib/exit-codes";
 import { emptyContext, toCleanedCalView } from "../lib/format/cleaned-types";
@@ -84,6 +86,7 @@ export async function runMergedCalendar(
 		.filter((p) => p.occurrence.source === "event")
 		.map((p) => p.raw as Event);
 	warnings.push(...formatDuplicateWarnings(detectDuplicateEvents(eventRaws)));
+	warnings.push(...formatReshapeWarnings(detectPossibleReshapes(eventRaws)));
 	const print = (result: unknown) =>
 		console.log(
 			JSON.stringify(

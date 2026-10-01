@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { Event } from "../../lib/api/types";
 import {
 	detectDuplicateEvents,
+	detectPossibleReshapes,
 	formatDuplicateWarnings,
+	formatReshapeWarnings,
 } from "../../lib/event-duplicates";
 
 function event(overrides: Partial<Event> & { id: string }): Event {
@@ -122,5 +124,106 @@ describe("detectDuplicateEvents", () => {
 		expect(warnings[0]).toContain("Walk + feed Tidus");
 		expect(warnings[0]).toContain("dcd57e10");
 		expect(warnings[0]).toContain("e17726f7");
+	});
+});
+
+describe("detectPossibleReshapes", () => {
+	test("flags tonight's reshape pair: corgi 5:45-6:15, Tidus 6:25-6:55", () => {
+		const groups = detectPossibleReshapes([
+			event({
+				id: "corgi-1",
+				title: "Walk + feed corgi",
+				start_time: "2026-10-01T00:45:00.000Z",
+				end_time: "2026-10-01T01:15:00.000Z",
+			}),
+			event({ id: "tidus-1", title: "Walk + feed Tidus" }),
+		]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.kind).toBe("possible-reshape");
+		expect(groups[0]?.event_ids.sort()).toEqual(["corgi-1", "tidus-1"]);
+	});
+
+	test("does not flag adjacent blocks with unrelated titles", () => {
+		const groups = detectPossibleReshapes([
+			event({ id: "tidus-1", title: "Walk + feed Tidus" }),
+			event({
+				id: "dinner-1",
+				title: "Dinner",
+				start_time: "2026-10-01T01:55:00.000Z",
+				end_time: "2026-10-01T02:45:00.000Z",
+			}),
+		]);
+		expect(groups).toHaveLength(0);
+	});
+
+	test("does not flag similar titles far apart", () => {
+		const groups = detectPossibleReshapes([
+			event({
+				id: "corgi-1",
+				title: "Walk + feed corgi",
+				start_time: "2026-10-01T00:45:00.000Z",
+				end_time: "2026-10-01T01:15:00.000Z",
+			}),
+			event({
+				id: "tidus-1",
+				title: "Walk + feed Tidus",
+				start_time: "2026-10-01T05:25:00.000Z",
+				end_time: "2026-10-01T05:55:00.000Z",
+			}),
+		]);
+		expect(groups).toHaveLength(0);
+	});
+
+	test("does not flag identical titles (tier-1 territory)", () => {
+		const groups = detectPossibleReshapes([
+			event({ id: "aaa" }),
+			event({
+				id: "bbb",
+				start_time: "2026-10-01T01:55:00.000Z",
+				end_time: "2026-10-01T02:25:00.000Z",
+			}),
+		]);
+		expect(groups).toHaveLength(0);
+	});
+
+	test("does not flag different calendars", () => {
+		const groups = detectPossibleReshapes([
+			event({
+				id: "corgi-1",
+				title: "Walk + feed corgi",
+				start_time: "2026-10-01T00:45:00.000Z",
+				end_time: "2026-10-01T01:15:00.000Z",
+			}),
+			event({ id: "tidus-1", title: "Walk + feed Tidus", calendar_id: "cal-2" }),
+		]);
+		expect(groups).toHaveLength(0);
+	});
+
+	test("flags overlapping similar titles too, not just adjacent", () => {
+		const groups = detectPossibleReshapes([
+			event({
+				id: "corgi-1",
+				title: "Walk + feed corgi",
+				start_time: "2026-10-01T01:00:00.000Z",
+				end_time: "2026-10-01T01:40:00.000Z",
+			}),
+			event({ id: "tidus-1", title: "Walk + feed Tidus" }),
+		]);
+		expect(groups).toHaveLength(1);
+	});
+
+	test("formatReshapeWarnings mentions the reshape pattern", () => {
+		const groups = detectPossibleReshapes([
+			event({
+				id: "corgi-1",
+				title: "Walk + feed corgi",
+				start_time: "2026-10-01T00:45:00.000Z",
+				end_time: "2026-10-01T01:15:00.000Z",
+			}),
+			event({ id: "tidus-1", title: "Walk + feed Tidus" }),
+		]);
+		const warnings = formatReshapeWarnings(groups);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("leftover");
 	});
 });
