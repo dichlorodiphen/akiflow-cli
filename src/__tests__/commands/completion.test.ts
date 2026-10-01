@@ -263,3 +263,30 @@ describe("completion command", () => {
 		expect(output).toContain("complete -c af");
 	});
 });
+
+it.each([
+	"bash",
+	"zsh",
+	"fish",
+])("includes reconcile and its flags in %s completion", async (shell) => {
+	const log = spyOn(console, "log").mockImplementation(() => {});
+	try {
+		await completionCommand.run?.({ args: { shell } } as never);
+		const output = log.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(output).toContain("reconcile");
+		expect(output).toContain(shell === "fish" ? "google-cmd" : "--google-cmd");
+		for (const flag of [
+			"today",
+			"tomorrow",
+			"date",
+			"from",
+			"to",
+			"timezone",
+			"calendar",
+			"json",
+		])
+			expect(output).toContain(shell === "fish" ? flag : `--${flag}`);
+	} finally {
+		log.mockRestore();
+	}
+});

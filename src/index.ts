@@ -11,7 +11,7 @@ installOutputContract(argv, "af");
 try {
 	const validated = await validateArgv(main, argv);
 	setOutputCommand(validated.command);
-	if (["task list", "cal", "audit"].includes(validated.command))
+	if (["task list", "cal", "audit", "reconcile"].includes(validated.command))
 		validateDateSelectors(validated.values);
 	if (
 		validated.command === "slot list" ||

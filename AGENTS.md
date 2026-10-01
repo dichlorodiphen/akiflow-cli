@@ -4,7 +4,7 @@ Private Bun-native Akiflow CLI with a resource-first command surface.
 
 ## Structure
 
-- `src/index.ts` registers top-level resources: `task`, `event`, `slot`, `batch`, `convert`, `cal`, `audit`, `calendar`, `project`, `auth`, `cache`, `doctor`, `refresh`, and `completion`.
+- `src/index.ts` registers top-level resources: `task`, `event`, `slot`, `batch`, `convert`, `cal`, `audit`, `reconcile`, `calendar`, `project`, `auth`, `cache`, `doctor`, `refresh`, and `completion`.
 - `src/commands/task/index.ts` exposes `list`, `create`, `complete`, `update`, `plan`, `snooze`, and `delete`.
 - `src/commands/event.ts` exposes `create`, `update`, `delete`, and `attendees add|remove`.
 - `src/commands/slot.ts` exposes `list`, `show`, `create`, `update`, and `delete`.
@@ -124,3 +124,15 @@ and a review envelope. Echo suggestions never suppress records; linked events
 own time, and native tasks without provider IDs never echo-group. Occurrence
 provenance uses resource fetch time and generation; `pending: false` is reserved
 for D. The legacy task-list pending helper is separate from occurrence snapshots.
+
+## Read-only reconciliation
+
+`af reconcile` is registered in the command tree and strict date prevalidation.
+It compares fresh Akiflow and Google events, with independent pinned-cache
+presence diagnostics. Never call refresh/readResource/snapshotResources or any
+cache initialization/publication from this path. Akiflow uses the readOnly
+client and only GET /v5/events and /v5/calendars; Google argv permits only
+calendar events list/get. Keep cancellation/exclusion evidence and calendar
+scoping. Findings exit 0; usage/helper errors exit 2, auth 3, upstream 5.
+Helper hidden OAuth behavior and live incident/all-day specimens are release
+acceptance gates for the coordinator; do not run live Google from the sandbox.

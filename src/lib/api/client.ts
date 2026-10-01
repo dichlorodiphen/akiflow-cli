@@ -31,6 +31,8 @@ const DEFAULT_PLATFORM = "web";
 const DEFAULT_LIMIT = 2500;
 
 export interface AkiflowClientOptions {
+	/** Reject writes and fail authentication without refreshing or persisting credentials. */
+	readOnly?: boolean;
 	credentials?: AkiflowCredentials;
 	version?: string;
 	platform?: string;
@@ -41,8 +43,10 @@ export class AkiflowClient {
 	private version: string;
 	private platform: string;
 	private refreshPromise: Promise<boolean> | null = null;
+	private readonly readOnly: boolean;
 
 	constructor(options: AkiflowClientOptions = {}) {
+		this.readOnly = options.readOnly === true;
 		this.credentials = options.credentials ?? null;
 		this.version = options.version ?? DEFAULT_VERSION;
 		this.platform = options.platform ?? DEFAULT_PLATFORM;
@@ -147,6 +151,9 @@ export class AkiflowClient {
 		body?: unknown,
 		retried = false,
 	): Promise<ApiResponse<TData>> {
+		if (this.readOnly && method !== "GET") {
+			throw new Error("Read-only Akiflow client permits only GET requests");
+		}
 		const url = `${process.env.AF_API_BASE ?? BASE_URL}${path}`;
 		const headers = await this.buildHeaders(method !== "GET");
 
@@ -165,6 +172,12 @@ export class AkiflowClient {
 					? `API request timed out after ${timeoutMs}ms: ${method} ${path}`
 					: "Failed to connect to Akiflow API",
 				error instanceof Error ? error : undefined,
+			);
+		}
+
+		if (response.status === 401 && this.readOnly) {
+			throw new AuthError(
+				"Authentication failed during read-only observation. Authenticate separately with 'af auth login' and rerun reconcile.",
 			);
 		}
 
@@ -368,6 +381,9 @@ export class AkiflowClient {
 	async submitEventOperations(
 		operations: EventOperationPayload[],
 	): Promise<MutationResult> {
+		if (this.readOnly) {
+			throw new Error("Read-only Akiflow client permits only GET requests");
+		}
 		try {
 			const response = await this.request<EventOperation[]>(
 				"POST",

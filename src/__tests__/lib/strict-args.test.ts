@@ -102,3 +102,33 @@ describe("strict command tree arguments", () => {
 		expect(manifest.alias?.flags).toEqual(manifest.thing?.flags);
 	});
 });
+
+test("reconcile exposes only read-only day, calendar, timezone and helper flags", async () => {
+	await expect(
+		validateArgv(main, [
+			"reconcile",
+			"--date",
+			"2026-09-30",
+			"--timezone",
+			"America/Los_Angeles",
+			"--calendar",
+			"Personal",
+			"--google-cmd",
+			"/tmp/helper with spaces",
+			"--json",
+			"--envelope",
+		]),
+	).resolves.toMatchObject({ command: "reconcile" });
+	for (const flag of [
+		"--execute",
+		"--delete",
+		"--raw",
+		"--search",
+		"--send-updates",
+		"--refresh",
+	])
+		await expect(validateArgv(main, ["reconcile", flag])).rejects.toThrow(flag);
+	await expect(validateArgv(main, ["reconcile", "unexpected"])).rejects.toThrow(
+		"unexpected",
+	);
+});
