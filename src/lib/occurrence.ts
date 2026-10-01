@@ -1,6 +1,11 @@
 import type { Event, Task, TimeSlot } from "./api/types";
 import { parseLocalDate } from "./date-parser";
 import { filterEvents } from "./filters/event";
+import {
+	coveredRecurringSlots,
+	expandRecurringEvents,
+	isRecurringEventMaster,
+} from "./recurrence-expansion";
 
 export type OccurrenceSource = "event" | "slot" | "task";
 export interface RecurrenceIdentity {
@@ -173,19 +178,43 @@ export function normalizeTask(
 	return occurrence;
 }
 
-/** Pure snapshot query. Hidden-master visibility delegates to the existing rule. */
+/** Pure snapshot query with bounded expansion and original-slot overlays. */
 export function queryOccurrencesWithRaw(
 	input: OccurrenceInputs,
 	query: OccurrenceQuery = {},
 ): OccurrenceWithRaw[] {
 	if (query.from && query.to && query.from >= query.to) return [];
+	const evidence = input.events ?? [];
+	const covered = coveredRecurringSlots(evidence);
+	const events = filterEvents(evidence, { includeDeclined: true }).filter(
+		(e) => {
+			// A moved/deleted exception covers its original anchor, even when the
+			// legacy visibility rule (which compares current starts) shows a master.
+			if (isRecurringEventMaster(e)) {
+				const time = e.start_time ? new Date(e.start_time) : null;
+				const anchor =
+					time && Number.isFinite(time.getTime())
+						? time.toISOString()
+						: e.start_date;
+				if (covered.has(`${e.id}|${anchor}`)) return false;
+			}
+			return !e.recurrence_exception_delete;
+		},
+	);
+	const expanded = expandRecurringEvents(
+		events,
+		query.from,
+		query.to,
+		evidence,
+	);
 	const candidates: {
 		occurrence: Occurrence | null;
 		raw: Event | TimeSlot | Task;
 	}[] = [
-		...filterEvents(input.events ?? [], { includeDeclined: true }).map(
-			(raw) => ({ occurrence: normalizeEvent(raw), raw }),
-		),
+		...[...events, ...expanded].map((raw) => ({
+			occurrence: normalizeEvent(raw),
+			raw,
+		})),
 		...(input.slots ?? []).map((raw) => ({
 			occurrence: normalizeSlot(raw),
 			raw,

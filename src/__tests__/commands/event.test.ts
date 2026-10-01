@@ -422,7 +422,9 @@ describe("event command", () => {
 	});
 
 	it("refuses to delete an event the CLI did not create without --confirm", async () => {
-		const consoleErrorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const consoleErrorSpy = spyOn(console, "error").mockImplementation(
+			() => {},
+		);
 		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
 			throw new Error("guard exit");
 		});
@@ -489,6 +491,57 @@ describe("event command", () => {
 			"Fare difference: $300\nBring ID.",
 		);
 		consoleLogSpy.mockRestore();
+	});
+
+	it("rejects virtual IDs even if a cached row matches exactly", () => {
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("virtual guard exit");
+		});
+		try {
+			const id = "virtual:recurrence:series:2026-10-01T00:45:00.000Z";
+			expect(() => resolveCachedEvent([event({ id })], id)).toThrow(
+				"virtual guard exit",
+			);
+			expect(errorSpy).toHaveBeenCalledWith(
+				expect.stringContaining("read-only"),
+			);
+		} finally {
+			errorSpy.mockRestore();
+			exitSpy.mockRestore();
+		}
+	});
+
+	it.each([
+		eventUpdateCommand,
+		eventDeleteCommand,
+	])("rejects virtual event mutation before auth, cache or API work", async (command) => {
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("virtual guard exit");
+		});
+		try {
+			await expect(
+				command.run!({
+					args: {
+						id: "virtual:recurrence:series:2026-10-01T00:45:00.000Z",
+						title: "Changed",
+						_: [],
+					},
+					rawArgs: [],
+				} as any),
+			).rejects.toThrow("virtual guard exit");
+			expect(errorSpy).toHaveBeenCalledWith(
+				expect.stringContaining("read-only"),
+			);
+			expect(loadCredentialsSpy).not.toHaveBeenCalled();
+			expect(readResourceSpy).not.toHaveBeenCalled();
+			expect(refreshResourceSpy).not.toHaveBeenCalled();
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			errorSpy.mockRestore();
+			exitSpy.mockRestore();
+		}
 	});
 
 	it("rejects ambiguous id prefixes", () => {
