@@ -34,7 +34,10 @@ import {
 	loadCreatedEventIds,
 } from "../lib/event-creation-journal";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
-import { editRecurrenceInstance, getCapabilities } from "../lib/providers/router";
+import {
+	editRecurrenceInstance,
+	getCapabilities,
+} from "../lib/providers/router";
 import { truncateSeriesUntil } from "../lib/recurrence";
 import {
 	formatInTimezone,
@@ -144,7 +147,16 @@ async function resolveDescription(
 	return description ?? fallback ?? "";
 }
 
+function rejectVirtualEventId(identifier: string): void {
+	if (identifier.startsWith("virtual:")) {
+		fail(
+			"Virtual recurring event occurrences are read-only. Use the real series ID and an explicit recurrence scope.",
+		);
+	}
+}
+
 export function resolveCachedEvent(events: Event[], identifier: string): Event {
+	rejectVirtualEventId(identifier);
 	const exact = events.find((event) => event.id === identifier);
 	if (exact) return exact;
 
@@ -477,8 +489,9 @@ export const eventUpdateCommand = defineCommand({
 		},
 	},
 	run: async (context) => {
-		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		rejectVirtualEventId(args.id as string);
+		const client = createClient();
 		const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
 		// Refresh events first so the update's operation base is built from the
 		// latest server state. Without this, back-to-back updates build the
@@ -766,8 +779,9 @@ export const eventDeleteCommand = defineCommand({
 		},
 	},
 	run: async (context) => {
-		const client = createClient();
 		const args = context.args as Record<string, unknown>;
+		rejectVirtualEventId(args.id as string);
+		const client = createClient();
 		const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
 
 		const events = await mutationReader(args["dry-run"] === true)(
@@ -792,8 +806,7 @@ export const eventDeleteCommand = defineCommand({
 		const isRecurring =
 			(Array.isArray(event.recurrence)
 				? event.recurrence.length > 0
-				: !!event.recurrence) ||
-			!!event.recurring_id;
+				: !!event.recurrence) || !!event.recurring_id;
 		if (scope === "instance") {
 			console.error(
 				"Error: --scope instance delete is not yet implemented. Use the Google fallback adapter directly once configured.",
@@ -871,7 +884,10 @@ export const eventDeleteCommand = defineCommand({
 		// confirms — this is the 2026-09-26 "tilapia" shape, where a delete
 		// could otherwise reach a Google-side event the CLI never made.
 		const confirmed = args.confirm === true;
-		if (!confirmed && deleteNeedsConfirmation(event.id, loadCreatedEventIds())) {
+		if (
+			!confirmed &&
+			deleteNeedsConfirmation(event.id, loadCreatedEventIds())
+		) {
 			fail(
 				`Event "${event.id}" ("${event.title ?? "untitled"}") was not created by this CLI. ` +
 					`Deleting it cancels the event on Google Calendar. Re-run with --confirm to proceed.`,

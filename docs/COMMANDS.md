@@ -213,7 +213,20 @@ checks as ok, warning, or critical, includes recovery instructions (also with
 It attaches per-resource fetch timestamps and keeps linked constituents visible;
 linked events own time, followed by slots, then tasks. Deleted, hidden, cancelled,
 declined, done, and trashed records are excluded by default. Uncovered recurring
-series masters retain their existing visibility rule. An explicit calendar can
+series masters retain their existing visibility rule, with original-slot exceptions
+suppressing the anchor too. Untouched event instances are expanded locally from
+cached RRULEs in the series timezone; wall time stays fixed across DST. All-day
+series retain their date span. Moved, hidden, cancelled, deleted and
+exception-delete records suppress their original slots. Synthetic event IDs
+(`virtual:recurrence:<master-id>:<slot-ISO>`) are read-only and rejected by event
+mutations before auth, cache or API work.
+
+Expansion performs no API calls or cache writes. Queries without an upper bound
+use 366 days from the lower bound (or master start); each series is limited to
+1000 slots and 100,000 examined rule candidates, including historical ones.
+Very old dense rules can therefore exhaust the work limit before the requested
+window. Malformed rules/timezones and EXRULE series retain materialized records
+without expansion. DST gaps are skipped and folds use the first instant. An explicit calendar can
 select a hidden calendar, but deleted calendars remain excluded. Without an
 explicit calendar, the active visible calendar set applies. Account and connector
 filters apply to every source. `--no-events`, `--no-slots`, and `--no-tasks` skip

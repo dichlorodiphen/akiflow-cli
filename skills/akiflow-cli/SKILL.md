@@ -40,7 +40,7 @@ af cal --today --no-events --json
 af cal --today --calendar <calendar-id> --json
 ```
 
-`af cal` returns events, time slots, and scheduled tasks. Hidden calendars and hidden/deleted/declined events are excluded by default. Use `--declined` only when asked.
+`af cal` returns events, time slots, and scheduled tasks. Cached recurring events expand locally in the series timezone, including all-day series; materialized exceptions suppress their original slots. Virtual event IDs (`virtual:recurrence:...`) are read-only and cannot be updated or deleted. Expansion uses no API calls or cache writes, with a 366-day default horizon, 1000-slot limit and 100,000-candidate work limit per series. Dense old rules can exhaust that work limit before the requested window. DST gaps are skipped; folds use the first instant. Invalid rules/zones and EXRULE series are not expanded. Hidden calendars and hidden/deleted/declined events are excluded by default. Use `--declined` only when asked.
 
 ## Create And Schedule
 
