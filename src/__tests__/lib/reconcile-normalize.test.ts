@@ -102,7 +102,9 @@ test("calendar mappings preserve provider IDs and account provenance", () => {
 		google_id: calendar.origin_id,
 		account_id: "account",
 	});
-	expect(selectCalendars([calendar, workCalendar])).toEqual(selected);
+	// No input selects the personal-only default (2026-10-01: David decided
+	// reconcile stays personal-only; the work calendar is not linkable).
+	expect(selectCalendars([calendar, workCalendar])).toEqual([calendar.origin_id]);
 	for (const input of [calendar.id, calendar.origin_id, "Personal", "Pers"])
 		expect(selectCalendars([calendar, workCalendar], input)).toEqual([
 			calendar.origin_id,

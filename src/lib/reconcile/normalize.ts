@@ -13,8 +13,13 @@ import { addCalendarDays, intersectsWindow } from "./window";
 
 export const DEFAULT_RECONCILE_CALENDARS = [
 	"dichlorodiphen@gmail.com",
-	"david.young@databricks.com",
 ];
+// 2026-10-01: David decided personal-only. The work Google account cannot be
+// linked to the Hatch connector and the work calendar is no longer shared
+// with the personal identity, so the default must not include
+// david.young@databricks.com (its Google read 404s and fails the run).
+// Revisit if he shares the work calendar with the personal account; the
+// --calendar flag still selects any calendar explicitly.
 
 export function selectCalendars(
 	calendars: Calendar[],
