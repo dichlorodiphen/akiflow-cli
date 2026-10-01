@@ -39,6 +39,7 @@ import {
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import { recordCreatedEvent } from "../lib/event-creation-journal";
 import { previewOccurrences, validateRRule } from "../lib/recurrence";
 import {
 	assertMutableTaskId,
@@ -838,6 +839,23 @@ export const createEventCommand = defineCommand({
 		const operation = buildCreateEventOperation(eventPayload, sendUpdates);
 		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
+		// Provenance for the delete guard: the CLI submits a
+		// client-generated UUID as the canonical event ID, so the ID is
+		// known at submit time. Record on accepted so `af event delete`
+		// can distinguish CLI-created events from foreign ones.
+		if (
+			receipt &&
+			receipt.status === "accepted"
+		) {
+			recordCreatedEvent({
+				event_id: operation.event_id,
+				created_at: new Date().toISOString(),
+				provenance: {
+					title: eventPayload.title,
+					calendar_id: eventPayload.calendar_id,
+				},
+			});
+		}
 		const verification =
 			receipt?.status === "accepted" && args.verify === true
 				? await verifyEventFields(

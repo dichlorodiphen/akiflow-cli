@@ -39,6 +39,7 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
+import { recordCreatedEvent } from "../lib/event-creation-journal";
 import {
 	filterTasks,
 	type StatusName,
@@ -600,6 +601,16 @@ export const convertTasksCommand = defineCommand({
 				// Update candidate.match so downstream logic treats it as converted.
 				// (We don't have the full Event object, but the ID suffices for
 				// verification and deletion gating.)
+				// Provenance for the delete guard: convert-created events are
+				// CLI-created, so later deletes must not demand --confirm.
+				recordCreatedEvent({
+					event_id: targetId,
+					created_at: new Date().toISOString(),
+					provenance: {
+						title: candidate.task.title ?? "",
+						calendar_id: candidate.payload.calendar_id ?? "",
+					},
+				});
 			}
 		}
 		const verifications = new Map<string, VerificationResult<Event>>();
