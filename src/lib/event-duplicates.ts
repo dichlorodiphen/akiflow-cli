@@ -1,4 +1,5 @@
 import type { Event } from "./api/types";
+import type { TimedRecord } from "./timed-record";
 
 export interface DuplicateGroup {
 	/** The calendar both events live on. */
@@ -29,24 +30,24 @@ function titleTokens(title: string | null | undefined): string[] {
 }
 
 interface TimedEvent {
-	event: Event;
+	event: TimedRecord;
 	startMs: number;
 	endMs: number;
 	key: string;
 }
 
-function toTimed(e: Event): TimedEvent | null {
+function toTimed(e: TimedRecord): TimedEvent | null {
 	// Timed events only: all-day duplicates are a different (rarer) shape and
 	// are intentionally out of scope.
-	if (!e.start_time) return null;
-	const startMs = Date.parse(e.start_time);
+	if (!e.start) return null;
+	const startMs = Date.parse(e.start);
 	if (Number.isNaN(startMs)) return null;
-	const endMs = e.end_time ? Date.parse(e.end_time) : startMs;
+	const endMs = e.end ? Date.parse(e.end) : startMs;
 	return {
 		event: e,
 		startMs,
 		endMs: Number.isNaN(endMs) ? startMs : endMs,
-		key: `${e.calendar_id ?? ""}|${normalizeTitle(e.title)}`,
+		key: `${e.calendar ?? ""}|${normalizeTitle(e.title)}`,
 	};
 }
 
@@ -61,10 +62,7 @@ function overlaps(a: TimedEvent, b: TimedEvent): boolean {
 /** Gap in ms between two events; 0 when they overlap or touch. */
 function gapMs(a: TimedEvent, b: TimedEvent): number {
 	if (overlaps(a, b)) return 0;
-	return Math.min(
-		Math.abs(a.startMs - b.endMs),
-		Math.abs(b.startMs - a.endMs),
-	);
+	return Math.min(Math.abs(a.startMs - b.endMs), Math.abs(b.startMs - a.endMs));
 }
 
 function toGroup(
@@ -76,7 +74,7 @@ function toGroup(
 	const first = cluster[0];
 	if (!first) return null;
 	return {
-		calendar_id: first.event.calendar_id ?? "",
+		calendar_id: first.event.calendar ?? "",
 		title: first.event.title ?? "",
 		event_ids: ids,
 		kind,
@@ -94,7 +92,9 @@ function toGroup(
  * ID). Deleted/hidden records must be filtered by the caller — this runs on
  * the already-filtered display set.
  */
-export function detectDuplicateEvents(events: Event[]): DuplicateGroup[] {
+export function detectDuplicateRecords(
+	events: TimedRecord[],
+): DuplicateGroup[] {
 	const timed = events
 		.map(toTimed)
 		.filter((t): t is TimedEvent => t !== null)
@@ -168,7 +168,7 @@ function titleSimilarity(a: TimedEvent, b: TimedEvent): number {
 	return shared / (ta.size + tb.size - shared);
 }
 
-export function detectPossibleReshapes(events: Event[]): DuplicateGroup[] {
+export function detectReshapeRecords(events: TimedRecord[]): DuplicateGroup[] {
 	const timed = events
 		.map(toTimed)
 		.filter((t): t is TimedEvent => t !== null)
@@ -176,7 +176,7 @@ export function detectPossibleReshapes(events: Event[]): DuplicateGroup[] {
 
 	const byCal = new Map<string, TimedEvent[]>();
 	for (const t of timed) {
-		const cal = t.event.calendar_id ?? "";
+		const cal = t.event.calendar ?? "";
 		const group = byCal.get(cal) ?? [];
 		group.push(t);
 		byCal.set(cal, group);
@@ -222,6 +222,25 @@ export function detectPossibleReshapes(events: Event[]): DuplicateGroup[] {
 	return reshapes;
 }
 
+/** Thin adapters preserve cal's existing projections, ordering and warning bytes. */
+function projectEvent(event: Event): TimedRecord {
+	return {
+		id: event.id,
+		calendar: event.calendar_id ?? "",
+		title: event.title,
+		start: event.start_time,
+		end: event.end_time,
+	};
+}
+
+export function detectDuplicateEvents(events: Event[]): DuplicateGroup[] {
+	return detectDuplicateRecords(events.map(projectEvent));
+}
+
+export function detectPossibleReshapes(events: Event[]): DuplicateGroup[] {
+	return detectReshapeRecords(events.map(projectEvent));
+}
+
 /** One human-readable warning line per duplicate group. */
 export function formatDuplicateWarnings(groups: DuplicateGroup[]): string[] {
 	return groups.map(
@@ -235,9 +254,7 @@ export function formatDuplicateWarnings(groups: DuplicateGroup[]): string[] {
 /** One human-readable warning line per suspected reshape leftover. */
 export function formatReshapeWarnings(groups: DuplicateGroup[]): string[] {
 	return groups.map((g) => {
-		const names = g.event_ids
-			.map((id) => id.slice(0, 8))
-			.join(", ");
+		const names = g.event_ids.map((id) => id.slice(0, 8)).join(", ");
 		return (
 			`Possible leftover block: ${g.event_ids.length} similarly-titled events sit adjacent ` +
 			`(ids: ${names}). If a planning session reshaped this block (e.g. "Walk + feed corgi" → ` +

@@ -589,3 +589,56 @@ describe("AkiflowClient", () => {
 		});
 	});
 });
+
+describe("read-only client", () => {
+	it("rejects writes before credentials or transport", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch");
+		const loadSpy = spyOn(storage, "loadCredentials");
+		try {
+			await expect(
+				new AkiflowClient({ readOnly: true }).upsertTasks([]),
+			).rejects.toThrow("only GET");
+			expect(fetchSpy).not.toHaveBeenCalled();
+			expect(loadSpy).not.toHaveBeenCalled();
+		} finally {
+			fetchSpy.mockRestore();
+			loadSpy.mockRestore();
+		}
+	});
+	it("401 issues one GET and never refreshes or persists credentials", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response("{}", { status: 401 }),
+		);
+		const saveSpy = spyOn(storage, "saveCredentials");
+		const loadSpy = spyOn(storage, "loadCredentials");
+		try {
+			const client = new AkiflowClient({
+				readOnly: true,
+				credentials: { ...mockCredentials, refreshToken: "refresh" },
+			});
+			await expect(client.get("/v5/events")).rejects.toThrow(
+				"Authenticate separately",
+			);
+			expect(fetchSpy).toHaveBeenCalledTimes(1);
+			expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+			expect(saveSpy).not.toHaveBeenCalled();
+			expect(loadSpy).not.toHaveBeenCalled();
+		} finally {
+			fetchSpy.mockRestore();
+			saveSpy.mockRestore();
+			loadSpy.mockRestore();
+		}
+	});
+});
+
+it("read-only event-operation submission rejects before receipt handling", async () => {
+	const fetchSpy = spyOn(globalThis, "fetch");
+	try {
+		await expect(
+			new AkiflowClient({ readOnly: true }).submitEventOperations([]),
+		).rejects.toThrow("only GET");
+		expect(fetchSpy).not.toHaveBeenCalled();
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});

@@ -272,3 +272,135 @@ or null if any is unknown. Occurrences have provider identity plus `observedAt`,
 `generation`, and `pending: false`. Pending is reserved for workstream D's overlay.
 The legacy `pending-tasks.json` helper used by task list is not part of these
 snapshot calendar/audit reads.
+
+## af reconcile
+
+Compare fresh Akiflow events with Google Calendar and inspect the existing CLI
+cache independently. This command observes events only: it does not repair sync,
+expand Akiflow recurrence rules, refresh caches, renew Akiflow credentials, or
+mutate events. Observations remain in memory.
+
+```text
+af reconcile
+  [--today | --tomorrow | --date <day> | --from <day> --to <day>]
+  [--timezone <IANA>]
+  [--calendar <Akiflow-id|Google-origin-id|unique-title>]
+  [--google-cmd <executable>]
+  [--json] [--envelope]
+```
+
+```bash
+af reconcile --date 2026-09-30 --timezone America/Los_Angeles
+af reconcile --calendar Personal --tomorrow --json
+af reconcile --from 2026-09-28 --to 2026-09-30 --json --envelope
+```
+
+Today is the default. Select exactly one selector family, and supply both range
+boundaries. Day selectors accept the existing strict vocabulary (for example,
+`today`, `tomorrow`, `next monday`, `in 3 days`, and `YYYY-MM-DD`), with timestamps
+and time-of-day selectors rejected. `--to` includes that entire local day. The
+limit is 31 local calendar days, including both endpoints. Windows are half-open
+`[start,end)` and handle 23/25-hour DST days using calendar-day arithmetic.
+
+Timezone precedence is `--timezone`, then `~/.config/af/config.json`'s `timezone`,
+then the host timezone. The September 30 example above reads
+`[2026-09-30T07:00:00Z,2026-10-01T07:00:00Z)` on both providers. All-day events
+participate in presence comparisons; Akiflow's inclusive end date is converted
+to Google's exclusive end date. All-day window intersection uses the canonical
+calendar's timezone.
+
+The private-fork defaults are `dichlorodiphen@gmail.com` and
+`david.young@databricks.com`. `--calendar` replaces both with one calendar,
+resolved against fresh Akiflow metadata by ID, Google origin ID, or unique title
+(including a unique title substring). Explicit hidden calendars are auditable;
+deleted calendars are excluded. A default calendar without a connection is
+still read from Google and receives `calendar_not_connected` diagnostics.
+
+Google executable precedence is `--google-cmd`, then `HATCH_GWS_CLI`, then
+`hatch_gws_cli` on PATH. Each override is one executable name/path, including
+paths containing spaces. Compatible wrappers must accept:
+
+```text
+<executable> calendar events list --params <one JSON argument>
+<executable> calendar events get --params <one JSON argument>
+```
+
+There is no shell or command splitting. List requests use identical window
+bounds, `singleEvents:true`, `showDeleted:true`, `orderBy:"startTime"`, and
+`maxResults:2500`. Every `nextPageToken` is followed, including on empty pages.
+The reader requires the native `calendar#events` collection object with `items`
+and optional `nextPageToken`; flattened/human helper output is rejected.
+Structured failures use an API `error` object with numeric `code` and `message`.
+Each subprocess is bounded to 30 seconds. A privsep socket failure is preserved
+as an upstream error. No Google sync token is persisted.
+
+Akiflow uses only GET `/v5/calendars` and `/v5/events`, starting without a cached
+cursor, and validates advancing pagination up to 1,000 pages. The read-only
+client rejects writes and fails a 401 without refreshing/persisting credentials.
+Authenticate separately with `af auth login`, then rerun. The cache reader pins
+one existing generation and reads events, calendars, and resource timestamps
+synchronously. It never initializes, migrates, locks, refreshes, or publishes.
+Missing/corrupt cache is `unavailable`, which cannot establish a cache gap.
+
+The four tiers are:
+
+| Tier | Interpretation |
+| --- | --- |
+| Google missing from Akiflow | One finding per active Google occurrence, distinguishing `server_gap`, `cache_gap`, `both_gap`, `calendar_not_connected`, and identity-linked `excluded` records. |
+| Akiflow missing/cancelled on Google | Fresh Akiflow only, distinguishing cancellation evidence, explicit provider-ID not-found, and not observed in the window. Read-only guest events remain eligible; `possible_phantom` is suspicion. |
+| Duplicates / overlaps | Identity collisions, same-title strict overlaps with transitive grouping, and neutral different-title overlaps, separately within each fresh source. |
+| Possible reshape leftovers | Unequal similar titles on the same calendar with at least two shared tokens, Jaccard ≥ 0.5, and overlap or a gap ≤ 30 minutes. Unique mirrors collapse in a combined inventory, retaining both source references. |
+
+Identities stay calendar scoped and case sensitive. Matching proceeds through
+exact provider ID, series plus original occurrence anchor, then mutually unique
+nonempty normalized title plus exact start. Contradictory provider IDs and
+ambiguous candidates remain possible counterparts. Identity-linked moves can
+be found outside the window by supplementary Google `events get` calls using
+only IDs actually observed on Akiflow. A series master establishes series
+presence only. A 404/410 establishes ID-not-found evidence without deletion
+causality. Declined/hidden/working-location records remain exclusion evidence;
+known declined counterparts are status differences, not missing occurrences.
+
+`--json` emits the existing wrapper:
+
+```json
+{"result":{"schema_version":1,"complete":true,"window":{},"sources":{},"records":[],"matches":[],"tiers":{},"cancelled_evidence":[],"cache_diagnostics":[],"diagnostics":[],"counts":{}},"next_cursor":null,"errors":[],"warnings":[]}
+```
+
+`result` includes UTC window bounds, timezone, `end_exclusive:true`, and
+`generated_at`. `sources.atomic:false` records that these reads are fresh but
+not an atomic provider snapshot. Akiflow coverage includes mode `fresh_full`,
+read times, pages per resource, and completeness; cache coverage includes
+availability, generation, capture time, resource timestamps, and events age;
+each Google calendar includes read times, pages, identity probes, and completeness.
+
+`records` retains every normalized observation, original source timing fields,
+source IDs/provenance, exclusions, cancellations, and out-of-window counterparts.
+Stable `ref` values distinguish side, observation, calendar, and native ID.
+`matches` includes both references and native IDs, method/confidence, and field
+differences. Cache comparisons stay in `cache_diagnostics`. Counts distinguish
+findings by tier and unique records involved; overlapping tiers do not imply
+additive duration or capacity. No capacity/free-time totals are emitted.
+
+Top-level `warnings` are strings; structured diagnostics stay inside `result`.
+Human warnings go to stderr as `Warning:` lines. A required-source failure emits
+`complete:false`, failed coverage, structured errors, and `tiers:null`, never a
+clean report based on an empty failed source. `--envelope` uses the existing
+universal output contract.
+
+| Outcome | Exit code |
+| --- | --- |
+| Complete report, including findings | 0 |
+| Invalid usage/window/calendar or missing/unexecutable helper | 2 |
+| Explicit authentication failure | 3 |
+| Provider/process failure, timeout, malformed or incomplete response | 5 |
+
+Before live acceptance, confirm the two defaults/profile timezone, the real
+helper's API envelopes/pagination/get support and hidden OAuth behavior, and a
+read-only all-day specimen. The helper's potential hidden state-changing auth
+calls require an explicit decision; the CLI does not assume an exception.
+Validate the Study specimen and retained corgi/Tidus and Dinner incident evidence.
+Sparse cancellation records remain null for absent title/time and may eventually
+disappear; a bounded date audit cannot guarantee historical deletion discovery.
+No tasks, slots, attendees, recurrence definitions, descriptions, reminders,
+repair operations, executable deletes, raw mode, or search are included in v1.
