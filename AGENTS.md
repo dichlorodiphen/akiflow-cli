@@ -90,6 +90,35 @@ uses all selected sources and supports `--min-duration`. Raw/summary naming is
 batch slot selectors accept account/connector/calendar filters. Batch preview
 readers remain local and never auto-refresh.
 
+## `af cal` data-quality warnings
+
+`af cal` appends a `warnings` array to its JSON output (and prints `Warning:`
+lines to stderr in human mode) for three conditions:
+
+- **Stale cache**: events `last_success_at` older than 10 minutes. The reader
+  should run `af refresh --rebuild` before trusting the view.
+- **Possible duplicates** (`kind: "duplicate"`): two or more displayed events
+  on the same calendar with the same normalized title and overlapping times
+  (`src/lib/event-duplicates.ts`). Same-ID records never count (sync folds
+  versions by ID); back-to-back same-title blocks do not count.
+- **Possible reshape leftovers** (`kind: "possible-reshape"`, added 2026-09-30
+  after the real 2026-09-30 incident): same calendar, *similar but not
+  identical* titles (≥2 shared tokens, Jaccard ≥ 0.5), times overlapping or
+  within 30 min. This is the shape a planning session leaves when it creates
+  a replacement block without deleting the old one — e.g. "Walk + feed Tidus"
+  6:25–6:55 created while tonight's instance of the recurring "Walk + feed
+  corgi" 5:45–6:15 series still stood. That instance lived on Google but never
+  appeared in the CLI's cache, so the first version of this detector (exact
+  titles only) was blind to it, and the "duplicate" was misdiagnosed twice.
+
+Do not "fix" a duplicate warning by deleting from the cache: rebuild first and
+re-check; a warning on a stale generation usually resolves to a single event.
+A reshape warning names a pattern the CLI can only suspect — confirm in the
+calendar UI (the UI is the source of truth when investigating a CLI bug) and
+delete the leftover there; per-instance deletes of a recurring series go
+through the Google Calendar connector, since the Akiflow API cannot create
+recurrence exceptions.
+
 `af audit --date YYYY-MM-DD --json` emits schema version 1 with audit metadata
 and a review envelope. Echo suggestions never suppress records; linked events
 own time, and native tasks without provider IDs never echo-group. Occurrence
