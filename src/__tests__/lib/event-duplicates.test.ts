@@ -212,6 +212,24 @@ describe("detectPossibleReshapes", () => {
 		expect(groups).toHaveLength(1);
 	});
 
+	test("does not flag distinct blocks sharing only glue words", () => {
+		const groups = detectPossibleReshapes([
+			event({
+				id: "abhay-1",
+				title: "Check on PR review status with Abhay",
+				start_time: "2026-10-01T16:00:00.000Z",
+				end_time: "2026-10-01T16:15:00.000Z",
+			}),
+			event({
+				id: "avinash-1",
+				title: "Check with Avinash on PR",
+				start_time: "2026-10-01T16:00:00.000Z",
+				end_time: "2026-10-01T16:15:00.000Z",
+			}),
+		]);
+		expect(groups).toHaveLength(0);
+	});
+
 	test("formatReshapeWarnings mentions the reshape pattern", () => {
 		const groups = detectPossibleReshapes([
 			event({

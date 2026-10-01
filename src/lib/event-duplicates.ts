@@ -29,6 +29,54 @@ function titleTokens(title: string | null | undefined): string[] {
 		.filter((t) => t.length > 0);
 }
 
+/**
+ * Glue words carry no topical meaning ("Check on PR review status with
+ * Abhay" vs "Check with Avinash on PR" share check/on/pr/with but are
+ * different blocks). Filtering them keeps the similarity bar about the
+ * distinctive core of each title — the thing a reshape actually preserves
+ * ("Walk + feed corgi" → "Walk + feed Tidus" shares walk/feed).
+ */
+const TITLE_STOPWORDS = new Set([
+	"a",
+	"an",
+	"the",
+	"and",
+	"or",
+	"but",
+	"nor",
+	"of",
+	"on",
+	"in",
+	"at",
+	"to",
+	"for",
+	"with",
+	"by",
+	"from",
+	"as",
+	"into",
+	"onto",
+	"upon",
+	"over",
+	"under",
+	"between",
+	"about",
+	"via",
+	"vs",
+	"per",
+	"plus",
+	"without",
+	"within",
+]);
+
+function topicalTokens(title: string | null | undefined): Set<string> {
+	const out = new Set<string>();
+	for (const t of titleTokens(title)) {
+		if (!TITLE_STOPWORDS.has(t)) out.add(t);
+	}
+	return out;
+}
+
 interface TimedEvent {
 	event: TimedRecord;
 	startMs: number;
@@ -149,18 +197,20 @@ export function detectDuplicateRecords(
  * ("Walk + feed Tidus" 6:25–6:55) without deleting the old one
  * ("Walk + feed corgi" 5:45–6:15).
  *
- * Similarity bar: at least 2 shared tokens and Jaccard >= 0.5, so "Dinner"
- * next to "Walk + feed Tidus" never fires but "Walk + feed corgi" next to
- * "Walk + feed Tidus" does. Proximity bar: overlap or a gap of at most 30
- * minutes. Pairs with identical normalized titles are excluded — those are
+ * Similarity bar: at least 2 shared *topical* tokens (glue words like
+ * "on"/"with"/"the" are filtered first) and Jaccard >= 0.5, so "Dinner"
+ * next to "Walk + feed Tidus" never fires, "Walk + feed corgi" next to
+ * "Walk + feed Tidus" does, and "Check on PR review status with Abhay"
+ * next to "Check with Avinash on PR" does not (shared glue, different
+ * blocks). Proximity bar: overlap or a gap of at most 30 minutes. Pairs with identical normalized titles are excluded — those are
  * either tier-1 duplicates (when overlapping) or intentional back-to-back
  * splits, and flagging them here would contradict that rule.
  */
 const RESHAPE_MAX_GAP_MS = 30 * 60 * 1000;
 
 function titleSimilarity(a: TimedEvent, b: TimedEvent): number {
-	const ta = new Set(titleTokens(a.event.title));
-	const tb = new Set(titleTokens(b.event.title));
+	const ta = topicalTokens(a.event.title);
+	const tb = topicalTokens(b.event.title);
 	if (ta.size === 0 || tb.size === 0) return 0;
 	let shared = 0;
 	for (const t of ta) if (tb.has(t)) shared++;
