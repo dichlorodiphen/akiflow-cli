@@ -90,6 +90,22 @@ uses all selected sources and supports `--min-duration`. Raw/summary naming is
 batch slot selectors accept account/connector/calendar filters. Batch preview
 readers remain local and never auto-refresh.
 
+## `af cal` data-quality warnings
+
+`af cal` appends a `warnings` array to its JSON output (and prints `Warning:`
+lines to stderr in human mode) for two conditions, both added 2026-09-30
+after a stale cache made a deleted event look live:
+
+- **Stale cache**: events `last_success_at` older than 10 minutes. The reader
+  should run `af refresh --rebuild` before trusting the view.
+- **Possible duplicates**: two or more displayed events on the same calendar
+  with the same normalized title and overlapping times
+  (`src/lib/event-duplicates.ts`). Same-ID records never count (sync folds
+  versions by ID); back-to-back same-title blocks do not count.
+
+Do not "fix" a duplicate warning by deleting from the cache: rebuild first and
+re-check; a warning on a stale generation usually resolves to a single event.
+
 `af audit --date YYYY-MM-DD --json` emits schema version 1 with audit metadata
 and a review envelope. Echo suggestions never suppress records; linked events
 own time, and native tasks without provider IDs never echo-group. Occurrence

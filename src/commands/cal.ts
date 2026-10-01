@@ -1,12 +1,38 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import type { Event } from "../lib/api/types";
 import { CalendarResolutionError } from "../lib/calendar";
 import { formatLocalDate, parseLocalDate } from "../lib/date-parser";
+import {
+	detectDuplicateEvents,
+	formatDuplicateWarnings,
+} from "../lib/event-duplicates";
 import { EXIT_CODES, UsageError } from "../lib/exit-codes";
 import { emptyContext, toCleanedCalView } from "../lib/format/cleaned-types";
 import type { Occurrence } from "../lib/occurrence";
 import { readOccurrences } from "../lib/occurrence-read";
 import { buildReviewEnvelope } from "../lib/review-envelope";
+
+/** Warn when the events cache is older than this; stale reads once caused a
+ * deleted event to be reported as live (2026-09-30: a 16-min-old cache showed
+ * a duplicate dog-walk event that had already been deleted on the server). */
+const CACHE_STALE_AFTER_MS = 10 * 60 * 1000;
+
+function cacheStalenessWarning(
+	observedAt: Record<string, string | null> | undefined,
+): string | null {
+	const ts = observedAt?.events;
+	if (!ts) {
+		return "Calendar cache has never been synced — run `af refresh --rebuild` before trusting this view.";
+	}
+	const ageMs = Date.now() - Date.parse(ts);
+	if (!Number.isFinite(ageMs) || ageMs <= CACHE_STALE_AFTER_MS) return null;
+	const minutes = Math.round(ageMs / 60000);
+	return (
+		`Calendar data is ~${minutes} min old — run \`af refresh --rebuild\` ` +
+		`before trusting it (a stale cache can show events that were since moved or deleted).`
+	);
+}
 
 function time(date: Date): string {
 	return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
@@ -49,10 +75,26 @@ export async function runMergedCalendar(
 	);
 	const occurrences = pairs.map((p) => p.occurrence);
 	const envelope = buildReviewEnvelope(occurrences, window, minMinutes);
+	// Freshness + duplicate warnings. A stale cache once made a deleted event
+	// look live; surface both signals so readers know when to rebuild first.
+	const warnings: string[] = [];
+	const stale = cacheStalenessWarning(snapshot.observedAt);
+	if (stale) warnings.push(stale);
+	const eventRaws = pairs
+		.filter((p) => p.occurrence.source === "event")
+		.map((p) => p.raw as Event);
+	warnings.push(...formatDuplicateWarnings(detectDuplicateEvents(eventRaws)));
 	const print = (result: unknown) =>
 		console.log(
-			JSON.stringify({ result, next_cursor: null, errors: [] }, null, 2),
+			JSON.stringify(
+				{ result, next_cursor: null, errors: [], warnings },
+				null,
+				2,
+			),
 		);
+	const warnHuman = () => {
+		for (const w of warnings) console.warn(`Warning: ${w}`);
+	};
 	if (args.raw) {
 		print(
 			pairs.map(({ occurrence: o, raw }) => ({
@@ -66,7 +108,8 @@ export async function runMergedCalendar(
 	}
 	if (args.free) {
 		if (args.json) print(envelope.free_windows);
-		else
+		else {
+			warnHuman();
 			console.log(
 				envelope.free_windows.length
 					? envelope.free_windows
@@ -77,6 +120,7 @@ export async function runMergedCalendar(
 							.join("\n")
 					: "(no free windows in range)",
 			);
+		}
 		return;
 	}
 	if (args.summary) {
@@ -88,7 +132,8 @@ export async function runMergedCalendar(
 			busy_minutes: envelope.busy_minutes,
 		};
 		if (args.json) print(result);
-		else
+		else {
+			warnHuman();
 			console.log(
 				[
 					"Calendar summary",
@@ -99,6 +144,7 @@ export async function runMergedCalendar(
 					`busy_minutes: ${result.busy_minutes}`,
 				].join("\n"),
 			);
+		}
 		return;
 	}
 	if (args.json) {
@@ -108,6 +154,7 @@ export async function runMergedCalendar(
 		print(pairs.map((pair) => toCleanedCalView(pair, ctx)));
 		return;
 	}
+	warnHuman();
 	console.log(formatMergedTimeline(occurrences));
 }
 export function readFailure(error: unknown): never {
