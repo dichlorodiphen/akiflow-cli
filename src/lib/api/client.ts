@@ -31,7 +31,9 @@ const DEFAULT_PLATFORM = "web";
 const DEFAULT_LIMIT = 2500;
 
 export interface AkiflowClientOptions {
-	/** Reject writes and fail authentication without refreshing or persisting credentials. */
+	/** Reject non-GET requests. A 401 still triggers the normal access-token
+	 * refresh and one retry (auth maintenance, not a data write); the client
+	 * never touches the CLI cache or any user data. */
 	readOnly?: boolean;
 	credentials?: AkiflowCredentials;
 	version?: string;
@@ -172,12 +174,6 @@ export class AkiflowClient {
 					? `API request timed out after ${timeoutMs}ms: ${method} ${path}`
 					: "Failed to connect to Akiflow API",
 				error instanceof Error ? error : undefined,
-			);
-		}
-
-		if (response.status === 401 && this.readOnly) {
-			throw new AuthError(
-				"Authentication failed during read-only observation. Authenticate separately with 'af auth login' and rerun reconcile.",
 			);
 		}
 

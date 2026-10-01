@@ -605,23 +605,60 @@ describe("read-only client", () => {
 			loadSpy.mockRestore();
 		}
 	});
-	it("401 issues one GET and never refreshes or persists credentials", async () => {
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response("{}", { status: 401 }),
+	it("401 refreshes the token and retries the GET once", async () => {
+		const apiCalls: string[] = [];
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			((...args: Parameters<typeof fetch>): Promise<Response> => {
+				const raw = args[0];
+				const href =
+					typeof raw === "string"
+						? raw
+						: raw instanceof URL
+							? raw.href
+							: raw.url;
+				if (href.includes("/oauth/refreshToken")) {
+					return Promise.resolve(
+						new Response(
+							JSON.stringify({
+								access_token: "new-token",
+								refresh_token: "new-refresh",
+								expires_in: 3600,
+							}),
+							{ status: 200 },
+						),
+					);
+				}
+				apiCalls.push(href);
+				if (apiCalls.length === 1) {
+					return Promise.resolve(new Response("{}", { status: 401 }));
+				}
+				return Promise.resolve(
+					new Response(JSON.stringify({ success: true }), { status: 200 }),
+				);
+			}) as typeof fetch,
 		);
-		const saveSpy = spyOn(storage, "saveCredentials");
+		const saveSpy = spyOn(storage, "saveCredentials").mockResolvedValue();
 		const loadSpy = spyOn(storage, "loadCredentials");
 		try {
 			const client = new AkiflowClient({
 				readOnly: true,
 				credentials: { ...mockCredentials, refreshToken: "refresh" },
 			});
-			await expect(client.get("/v5/events")).rejects.toThrow(
-				"Authenticate separately",
+			const res = await client.get("/v5/events");
+			expect(res.success).toBe(true);
+			// One failed GET, one token refresh, one retried GET.
+			expect(apiCalls).toHaveLength(2);
+			expect(fetchSpy).toHaveBeenCalledTimes(3);
+			expect(saveSpy).toHaveBeenCalled();
+			expect(fetchSpy).toHaveBeenNthCalledWith(
+				3,
+				expect.any(String),
+				expect.objectContaining({
+					headers: expect.objectContaining({
+						Authorization: "Bearer new-token",
+					}),
+				}),
 			);
-			expect(fetchSpy).toHaveBeenCalledTimes(1);
-			expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
-			expect(saveSpy).not.toHaveBeenCalled();
 			expect(loadSpy).not.toHaveBeenCalled();
 		} finally {
 			fetchSpy.mockRestore();
