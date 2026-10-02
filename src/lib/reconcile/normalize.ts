@@ -1,6 +1,7 @@
 import type { Calendar, Event } from "../api/types";
 import { resolveCalendarFromList } from "../calendar";
 import { filterEvents } from "../filters/event";
+import { expandRecurringEvents } from "../recurrence-expansion";
 import { parseCalendarDate, validateTimezone } from "../timezone";
 import type { GoogleEvent, GoogleObservation } from "./google-reader";
 import {
@@ -11,9 +12,7 @@ import {
 } from "./types";
 import { addCalendarDays, intersectsWindow } from "./window";
 
-export const DEFAULT_RECONCILE_CALENDARS = [
-	"dichlorodiphen@gmail.com",
-];
+export const DEFAULT_RECONCILE_CALENDARS = ["dichlorodiphen@gmail.com"];
 // 2026-10-01: David decided personal-only. The work Google account cannot be
 // linked to the Hatch connector and the work calendar is no longer shared
 // with the personal identity, so the default must not include
@@ -150,12 +149,27 @@ export function normalizeAkiflow(
 	explicitCalendar = false,
 	freshMasters = events,
 ): ReconcileRecord[] {
+	// Retain all exception evidence, including existing virtual slots, but never
+	// expand a synthetic master if this input has already been expanded.
+	const evidence = events.filter(
+		(event) =>
+			!event.id.startsWith("virtual:") || event.recurring_id !== event.id,
+	);
+	const expanded = [
+		...events,
+		...expandRecurringEvents(
+			events,
+			new Date(window.start),
+			new Date(window.end),
+			evidence,
+		),
+	];
 	const visible = new Set(
-		filterEvents(events, { includeDeclined: true }).map((event) => event.id),
+		filterEvents(expanded, { includeDeclined: true }).map((event) => event.id),
 	);
 	const byId = new Map(calendars.map((calendar) => [calendar.id, calendar]));
 	const masters = new Map(freshMasters.map((event) => [event.id, event]));
-	return events.map((event) => {
+	return expanded.map((event) => {
 		if (event.calendar_id != null && typeof event.calendar_id !== "string")
 			throw new ReconcileError(
 				`Malformed Akiflow calendar identity for ${event.id}`,
