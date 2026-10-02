@@ -76,12 +76,7 @@ describe("previewOccurrences", () => {
 
 	test("revert-sensitive: preview is not empty", () => {
 		const dtstart = new Date("2026-06-22T16:00:00.000Z");
-		const preview = previewOccurrences(
-			"FREQ=DAILY",
-			dtstart,
-			"UTC",
-			3,
-		);
+		const preview = previewOccurrences("FREQ=DAILY", dtstart, "UTC", 3);
 		// If preview were stubbed to return [], this fails.
 		expect(preview.occurrences.length).toBeGreaterThan(0);
 	});
@@ -99,9 +94,7 @@ describe("truncateSeriesUntil", () => {
 	});
 
 	test("refuses when master has no RRULE", () => {
-		expect(() => truncateSeriesUntil(null, new Date())).toThrow(
-			"has no RRULE",
-		);
+		expect(() => truncateSeriesUntil(null, new Date())).toThrow("has no RRULE");
 		expect(() => truncateSeriesUntil([], new Date())).toThrow("has no RRULE");
 	});
 

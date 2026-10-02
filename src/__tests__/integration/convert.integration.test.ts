@@ -270,15 +270,7 @@ describe("af convert tasks --to events (Workstream B: safe conversion)", () => {
 		expect(refresh.exitCode).toBe(0);
 
 		const result = await spawnCli(
-			[
-				"convert",
-				"tasks",
-				"--to",
-				"events",
-				"--all",
-				"--execute",
-				"--json",
-			],
+			["convert", "tasks", "--to", "events", "--all", "--execute", "--json"],
 			{ env: testEnv },
 		);
 
@@ -295,7 +287,11 @@ describe("af convert tasks --to events (Workstream B: safe conversion)", () => {
 		await server.start();
 		loadAllFixtures(server);
 		const task1 = convertTaskFixture();
-		const task2 = { ...convertTaskFixture(), id: "task-convert-2", title: "Second convert fixture" };
+		const task2 = {
+			...convertTaskFixture(),
+			id: "task-convert-2",
+			title: "Second convert fixture",
+		};
 		server.respondTo("GET", "/v5/tasks", {
 			success: true,
 			message: null,

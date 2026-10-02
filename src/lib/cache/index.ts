@@ -1,5 +1,5 @@
 import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type {
 	Account,
 	ApiResponse,
@@ -247,7 +247,7 @@ export interface ResourceRecords {
 	contacts: Contact[];
 }
 
-/** Compatibility: read multiple resources at once using D's readResource. */
+/** Capture resources and their provenance from one immutable generation. */
 export async function snapshotResources(
 	client: CacheClient,
 	resources: readonly Resource[],
@@ -256,17 +256,49 @@ export async function snapshotResources(
 	generation: string | null;
 	observedAt: Record<Resource, string | null>;
 }> {
-	const data = {} as ResourceRecords;
-	const observedAt = {} as Record<Resource, string | null>;
-	for (const resource of resources) {
-		// Use type assertion to handle the overloaded readResource
-		const records = (await readResource(client, resource as "tasks")) as unknown[];
-		(data as unknown as Record<string, unknown[]>)[resource] = records;
-		const ts = await observationTimestamp(resource);
-		observedAt[resource] = ts ?? null;
+	let pinned = pinGeneration();
+	if (!pinned) pinned = await withLock(cacheLockPath(), ensureGeneration);
+	let tokens = await readTokens(pinned);
+	const stale = resources.some((resource) => {
+		const timestamp = tokens.last_success_at?.[resource];
+		const age = timestamp
+			? Date.now() - Date.parse(timestamp)
+			: Number.POSITIVE_INFINITY;
+		return (
+			!tokens[resource] || !Number.isFinite(age) || age > 24 * 60 * 60 * 1000
+		);
+	});
+	if (stale && !autoSyncDisabled()) {
+		await sharedRefresh(client);
+		pinned = pinGeneration();
+		if (!pinned) throw new Error("Cache refresh did not publish a generation");
+		tokens = await readTokens(pinned);
 	}
-	const generation = pinGeneration() ?? null;
-	return { data, generation, observedAt };
+	// Capture every resource synchronously; retry the whole snapshot if GC reclaimed the pin.
+	const capture = (directory: string) => {
+		const data = {} as ResourceRecords;
+		for (const resource of resources) {
+			(data as unknown as Record<string, unknown[]>)[resource] = parseRecords(
+				readFileSync(join(directory, `${resource}.jsonl`), "utf8"),
+			);
+		}
+		const observedAt = Object.fromEntries(
+			RESOURCES.map((resource) => [
+				resource,
+				tokens.last_success_at?.[resource] ?? null,
+			]),
+		) as Record<Resource, string | null>;
+		return { data, generation: basename(directory), observedAt };
+	};
+	try {
+		return capture(pinned);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		const current = pinGeneration();
+		if (!current || current === pinned) throw error;
+		tokens = await readTokens(current);
+		return capture(current);
+	}
 }
 
 /** Resource-specific confirmation timestamp from one pinned observation generation. */

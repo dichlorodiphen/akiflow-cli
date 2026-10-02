@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { spawnCli } from "./helpers/spawn-cli";
 import { makeTestEnv } from "./helpers/test-env";
@@ -70,7 +76,10 @@ function snapshot(dir: string): string {
 						}
 					});
 				for (const name of genFiles) {
-					entries.push([`${generation}/${name}`, readFileSync(join(genDir, name), "utf8")]);
+					entries.push([
+						`${generation}/${name}`,
+						readFileSync(join(genDir, name), "utf8"),
+					]);
 				}
 			}
 		}

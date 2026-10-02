@@ -152,8 +152,7 @@ export function outputMutation(input: {
 		const failed = input.receipts.some((r) =>
 			["failed", "unknown", "mismatch", "timeout"].includes(r.status as string),
 		);
-		const payloads =
-			succeeded && failed ? [{ failed: 1, changed: 1 }] : [];
+		const payloads = succeeded && failed ? [{ failed: 1, changed: 1 }] : [];
 		process.exitCode = classifyExit(1, errors, payloads);
 	}
 	return status;

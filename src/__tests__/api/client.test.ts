@@ -607,36 +607,32 @@ describe("read-only client", () => {
 	});
 	it("401 refreshes the token and retries the GET once", async () => {
 		const apiCalls: string[] = [];
-		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
-			((...args: Parameters<typeof fetch>): Promise<Response> => {
-				const raw = args[0];
-				const href =
-					typeof raw === "string"
-						? raw
-						: raw instanceof URL
-							? raw.href
-							: raw.url;
-				if (href.includes("/oauth/refreshToken")) {
-					return Promise.resolve(
-						new Response(
-							JSON.stringify({
-								access_token: "new-token",
-								refresh_token: "new-refresh",
-								expires_in: 3600,
-							}),
-							{ status: 200 },
-						),
-					);
-				}
-				apiCalls.push(href);
-				if (apiCalls.length === 1) {
-					return Promise.resolve(new Response("{}", { status: 401 }));
-				}
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(((
+			...args: Parameters<typeof fetch>
+		): Promise<Response> => {
+			const raw = args[0];
+			const href =
+				typeof raw === "string" ? raw : raw instanceof URL ? raw.href : raw.url;
+			if (href.includes("/oauth/refreshToken")) {
 				return Promise.resolve(
-					new Response(JSON.stringify({ success: true }), { status: 200 }),
+					new Response(
+						JSON.stringify({
+							access_token: "new-token",
+							refresh_token: "new-refresh",
+							expires_in: 3600,
+						}),
+						{ status: 200 },
+					),
 				);
-			}) as typeof fetch,
-		);
+			}
+			apiCalls.push(href);
+			if (apiCalls.length === 1) {
+				return Promise.resolve(new Response("{}", { status: 401 }));
+			}
+			return Promise.resolve(
+				new Response(JSON.stringify({ success: true }), { status: 200 }),
+			);
+		}) as typeof fetch);
 		const saveSpy = spyOn(storage, "saveCredentials").mockResolvedValue();
 		const loadSpy = spyOn(storage, "loadCredentials");
 		try {

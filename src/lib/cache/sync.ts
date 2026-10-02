@@ -117,10 +117,7 @@ interface SyncAttemptOpts<T extends { id: string }> {
 
 async function syncAttempt<
 	T extends { id: string; deleted_at?: string | null; status?: number | null },
->(
-	client: ResourceClient,
-	opts: SyncAttemptOpts<T>,
-): Promise<SyncResult> {
+>(client: ResourceClient, opts: SyncAttemptOpts<T>): Promise<SyncResult> {
 	const isCold = opts.previousToken == null;
 	let token: string | undefined = opts.previousToken ?? undefined;
 	let pages = 0;
@@ -131,7 +128,9 @@ async function syncAttempt<
 
 	// eslint-disable-next-line no-constant-condition
 	while (true) {
-		const params: { sync_token?: string; limit: number } = { limit: opts.limit };
+		const params: { sync_token?: string; limit: number } = {
+			limit: opts.limit,
+		};
 		if (token) params.sync_token = token;
 		const resp = await client.get<T[]>(opts.apiPath, params);
 		if (!resp.success) {

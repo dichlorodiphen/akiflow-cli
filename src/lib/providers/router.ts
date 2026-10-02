@@ -10,7 +10,11 @@
  */
 
 import type { Event } from "../api/types";
-import { editInstance, isGoogleConfigured, resolveGoogleIdentity } from "./google";
+import {
+	editInstance,
+	isGoogleConfigured,
+	resolveGoogleIdentity,
+} from "./google";
 import type {
 	IdentityResolution,
 	InstanceEdit,
@@ -62,7 +66,11 @@ export async function editRecurrenceInstance(
 	caps: RecurrenceCapabilities = getCapabilities(),
 ): Promise<ProviderEditOutcome> {
 	if (!originalStartTime) {
-		return { ok: false, reason: "no-identity", detail: "missing original_start_time anchor" };
+		return {
+			ok: false,
+			reason: "no-identity",
+			detail: "missing original_start_time anchor",
+		};
 	}
 	if (caps.akiflowExceptionWrites) {
 		// Future: Akiflow exception write path once capability is confirmed

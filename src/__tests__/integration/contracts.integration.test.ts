@@ -52,7 +52,7 @@ describe("H strict selectors and versioned JSON (isolated subprocesses)", () => 
 			expect(inventory()).toEqual(before);
 		}
 	});
-	test("legacy JSON remains unchanged and announces envelope migration on stderr", async () => {
+	test("legacy JSON includes cache warnings and announces envelope migration on stderr", async () => {
 		const result = await spawnCli(["cal", "--date", "2026-05-21", "--json"], {
 			env: isolated.env,
 		});
@@ -61,6 +61,9 @@ describe("H strict selectors and versioned JSON (isolated subprocesses)", () => 
 			result: [],
 			next_cursor: null,
 			errors: [],
+			warnings: [
+				"Calendar cache has never been synced — run `af refresh --rebuild` before trusting this view.",
+			],
 		});
 		expect(result.stderr).toContain(
 			"schema_version: 1 will become the default",
@@ -211,10 +214,6 @@ test("partial batch fixture reports exit 6 in JSON and text with structured erro
 		{ ...original, id: "partial-2", title: "Contract fixture", attendees: [] },
 	];
 	writeFileSync(
-		join(isolated.cacheDir, "events.jsonl"),
-		events.map((event) => JSON.stringify(event)).join("\n"),
-	);
-	writeFileSync(
 		join(isolated.cacheDir, "calendars.jsonl"),
 		JSON.parse(calendars)
 			.map((calendar: unknown) => JSON.stringify(calendar))
@@ -222,11 +221,10 @@ test("partial batch fixture reports exit 6 in JSON and text with structured erro
 	);
 	const fixture = `globalThis.fetch = async (input, init) => {
 		const url = String(input);
-		// Sync endpoint needs a sync_token; return empty sync for GETs.
-		if ((init?.method ?? "GET") === "GET" || url.includes("/v5/events")) {
-			if (url.includes("sync_token") || (init?.method ?? "GET") === "GET") {
-				return new Response(JSON.stringify({success:true,data:[],sync_token:"fixture-token",has_next_page:false}));
-			}
+		if ((init?.method ?? "GET") === "GET") {
+			const data = url.includes("/v5/events") ? ${JSON.stringify(events)}
+				: url.includes("/v5/calendars") ? ${calendars} : [];
+			return new Response(JSON.stringify({success:true,data,sync_token:"fixture-token",has_next_page:false}));
 		}
 		return new Response(JSON.stringify({success:true,data:[{event_id:"partial-1"}],message:"fixture partial"}));
 	};`;

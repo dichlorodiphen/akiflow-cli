@@ -109,6 +109,10 @@ function safety(
 			["/v5/events", "/v5/calendars"].includes(request.url.pathname),
 		),
 	).toBe(true);
+	googleReadSafety();
+}
+
+function googleReadSafety() {
 	for (const call of calls()) {
 		expect(call.executable).toBe(google.executable);
 		expect(call.argv.slice(0, 2)).toEqual(["calendar", "events"]);
@@ -213,23 +217,59 @@ describe("af reconcile read-only integration", () => {
 		});
 		safety(beforeCache, beforeConfig);
 	});
-	test("401 path fails auth with exactly one GET, no credential refresh/write", async () => {
+	test("401 refreshes credentials once and retries read-only GETs before reading Google", async () => {
 		seedCache();
 		server.force401();
-		const beforeCache = tree(env.cacheDir),
-			beforeConfig = tree(env.configDir);
-		const result = await run();
-		expect(result.exitCode).toBe(3);
+		const beforeCache = tree(env.cacheDir);
+		const oldToken = JSON.parse(
+			readFileSync(env.credentialsPath, "utf8"),
+		).token;
+		const refresh = server.gate({ path: "/oauth/refreshToken" });
+		const pending = run();
+		try {
+			await refresh.entered;
+			// Google must wait for fresh Akiflow state, including token refresh.
+			expect(calls()).toHaveLength(0);
+		} finally {
+			refresh.release();
+		}
+		const result = await pending;
+		expect(result.exitCode).toBe(0);
 		const output = JSON.parse(result.stdout);
 		expect(output.result).toMatchObject({
-			complete: false,
-			tiers: null,
-			sources: { akiflow: { complete: false } },
+			complete: true,
+			sources: {
+				akiflow: { complete: true, pages: { calendars: 2, events: 1 } },
+			},
 		});
-		expect(output.errors[0]?.message).toContain("Authenticate separately");
-		expect(server.requests).toHaveLength(1);
-		expect(calls()).toHaveLength(0);
-		safety(beforeCache, beforeConfig);
+		expect(output.errors).toEqual([]);
+		const refreshes = server.requests.filter(
+			(request) => request.method === "POST",
+		);
+		expect(refreshes).toHaveLength(1);
+		expect(refreshes[0]?.url.pathname).toBe("/oauth/refreshToken");
+		const newToken = JSON.parse(
+			readFileSync(env.credentialsPath, "utf8"),
+		).token;
+		expect(newToken).not.toBe(oldToken);
+		const gets = server.requests.filter((request) => request.method === "GET");
+		expect(gets).toHaveLength(4);
+		expect(gets[1]?.url.href).toBe(gets[0]?.url.href);
+		expect(gets[0]?.headers.authorization).toBe(`Bearer ${oldToken}`);
+		for (const request of gets.slice(1)) {
+			expect(request.headers.authorization).toBe(`Bearer ${newToken}`);
+			expect(["/v5/events", "/v5/calendars"]).toContain(request.url.pathname);
+			expect(request.url.searchParams.get("sync_token")).not.toBe(
+				"cached-token-must-not-be-used",
+			);
+			expect(request.url.searchParams.get("sync_token")).not.toBe(
+				"cached-calendar-token",
+			);
+		}
+		expect(server.requests).toHaveLength(5);
+		expect(calls().length).toBeGreaterThan(0);
+		googleReadSafety();
+		expect(tree(env.cacheDir)).toEqual(beforeCache);
 	});
 	test("missing cache stays uninitialized and creates no cache gap", async () => {
 		setup({ lists: { [calendar.origin_id]: [collection([ge()])] } });
@@ -255,7 +295,7 @@ describe("af reconcile read-only integration", () => {
 		const result = await run();
 		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.stdout).result.sources.google[0].pages).toBe(2);
-		expect(calls().filter((call) => call.argv[2] === "list")).toHaveLength(3);
+		expect(calls().filter((call) => call.argv[2] === "list")).toHaveLength(2);
 	});
 	test("supplementary get finds an exact identity outside the window", async () => {
 		setup({
@@ -371,18 +411,22 @@ describe("af reconcile read-only integration", () => {
 		);
 		expect(JSON.parse(result.stdout).result.tiers).toBeNull();
 	});
-	test("unconnected default calendar is still read and diagnosed even when empty", async () => {
+	test("default scope reads only the personal calendar and succeeds when it is empty", async () => {
 		server.seed("calendars", [{ ...calendar }]);
+		setup({ lists: { [calendar.origin_id]: [collection([])] } });
 		const result = await run();
 		const output = JSON.parse(result.stdout);
 		expect(result.exitCode).toBe(0);
-		expect(output.result.sources.google).toHaveLength(2);
-		expect(output.result.diagnostics).toContainEqual(
-			expect.objectContaining({
-				code: "calendar_not_connected",
-				calendar: workCalendar.origin_id,
-			}),
-		);
+		expect(output.result.complete).toBe(true);
+		expect(output.result.sources.google).toHaveLength(1);
+		const lists = calls().filter((call) => call.argv[2] === "list");
+		expect(lists).toHaveLength(1);
+		for (const call of lists) {
+			expect(JSON.parse(call.argv[4] ?? "{}").calendarId).toBe(
+				calendar.origin_id,
+			);
+		}
+		expect(output.result.counts.records_by_source.google).toBe(0);
 	});
 	test("explicit calendar replaces both defaults", async () => {
 		const result = await run(["--calendar", "Personal", "--json"]);

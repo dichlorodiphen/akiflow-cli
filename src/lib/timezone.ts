@@ -35,11 +35,7 @@ export class InvalidCalendarDateError extends Error {
 }
 
 export class DSTGapError extends Error {
-	constructor(
-		dateStr: string,
-		timeStr: string,
-		timezone: string,
-	) {
+	constructor(dateStr: string, timeStr: string, timezone: string) {
 		super(
 			`The local time ${timeStr} on ${dateStr} does not exist in ${timezone} ` +
 				`(DST spring-forward gap). Please choose a different time, e.g., ` +
@@ -50,11 +46,7 @@ export class DSTGapError extends Error {
 }
 
 export class DSTFoldError extends Error {
-	constructor(
-		dateStr: string,
-		timeStr: string,
-		timezone: string,
-	) {
+	constructor(dateStr: string, timeStr: string, timezone: string) {
 		super(
 			`The local time ${timeStr} on ${dateStr} is ambiguous in ${timezone} ` +
 				`(DST fall-back fold; it occurs twice). ` +
@@ -157,7 +149,13 @@ function getOffsetMinutes(utcMillis: number, timeZone: string): number {
 export function formatInTimezone(
 	utcIso: string,
 	timeZone: string,
-): { year: number; month: number; day: number; hours: number; minutes: number } {
+): {
+	year: number;
+	month: number;
+	day: number;
+	hours: number;
+	minutes: number;
+} {
 	validateTimezone(timeZone);
 	const utcMillis = new Date(utcIso).getTime();
 	if (Number.isNaN(utcMillis)) {
@@ -225,7 +223,14 @@ export function zonedTimeToUtc(
 
 	// Find all valid UTC instants for this wall time.
 	// During a fold, there are two; normally one; during a gap, zero.
-	const candidates = findUtcCandidates(year, month, day, hours, minutes, timeZone);
+	const candidates = findUtcCandidates(
+		year,
+		month,
+		day,
+		hours,
+		minutes,
+		timeZone,
+	);
 
 	if (candidates.length === 0) {
 		throw new DSTGapError(dateStr, timeStr, timeZone);
@@ -324,9 +329,7 @@ export function addCalendarDays(
 	const wall = formatInTimezone(utcIso, timeZone);
 
 	// Add days in wall-clock space
-	const wallDate = new Date(
-		Date.UTC(wall.year, wall.month - 1, wall.day),
-	);
+	const wallDate = new Date(Date.UTC(wall.year, wall.month - 1, wall.day));
 	wallDate.setUTCDate(wallDate.getUTCDate() + days);
 
 	const newYear = wallDate.getUTCFullYear();

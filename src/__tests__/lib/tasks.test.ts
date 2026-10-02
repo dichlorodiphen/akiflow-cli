@@ -228,12 +228,8 @@ describe("unified task repository", () => {
 				{ shortId: 2, id, title: "Real" },
 			],
 		};
-		expect(() => resolveTaskId("1", context)).toThrow(
-			"Synthetic task ID",
-		);
-		expect(() => resolveTaskId(virtual, null)).toThrow(
-			"Synthetic task ID",
-		);
+		expect(() => resolveTaskId("1", context)).toThrow("Synthetic task ID");
+		expect(() => resolveTaskId(virtual, null)).toThrow("Synthetic task ID");
 		expect(() => resolveTaskId("virtual:", context)).toThrow(
 			"Synthetic task ID",
 		);

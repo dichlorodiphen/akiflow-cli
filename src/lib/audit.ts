@@ -33,8 +33,7 @@ export function auditDiscrepancies(occurrences: readonly Occurrence[]) {
 			// the grouping: the canonical is the earliest start, id on ties.
 			[...members].sort(
 				(a, b) =>
-					a.start.getTime() - b.start.getTime() ||
-					a.id.localeCompare(b.id),
+					a.start.getTime() - b.start.getTime() || a.id.localeCompare(b.id),
 			)[0]!,
 		),
 		reason:

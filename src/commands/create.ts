@@ -38,8 +38,8 @@ import {
 	printDryRun,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
-import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { recordCreatedEvent } from "../lib/event-creation-journal";
+import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { previewOccurrences, validateRRule } from "../lib/recurrence";
 import {
 	assertMutableTaskId,
@@ -53,6 +53,7 @@ import {
 	taskMutationOutcome,
 	unknownTaskOutcome,
 } from "../lib/task-mutation-output";
+import { recordTaskIntent } from "../lib/tasks";
 import {
 	DSTFoldError,
 	DSTGapError,
@@ -63,7 +64,6 @@ import {
 	zonedTimeToUtc,
 } from "../lib/timezone";
 import { resolveEffectiveTimezone } from "../lib/timezone-profile";
-import { recordTaskIntent } from "../lib/tasks";
 import { verifyEventFields } from "../lib/verification";
 import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 
@@ -843,10 +843,7 @@ export const createEventCommand = defineCommand({
 		// client-generated UUID as the canonical event ID, so the ID is
 		// known at submit time. Record on accepted so `af event delete`
 		// can distinguish CLI-created events from foreign ones.
-		if (
-			receipt &&
-			receipt.status === "accepted"
-		) {
+		if (receipt && receipt.status === "accepted") {
 			recordCreatedEvent({
 				event_id: operation.event_id,
 				created_at: new Date().toISOString(),

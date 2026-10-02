@@ -1,5 +1,13 @@
 /// <reference types="bun" />
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	setSystemTime,
+	spyOn,
+} from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +21,7 @@ let readFileMock: ReturnType<typeof spyOn> | null = null;
 let testDir: string;
 const oldCacheDir = process.env.AF_CACHE_DIR;
 beforeEach(() => {
+	setSystemTime(today);
 	testDir = mkdtempSync(join(tmpdir(), "af-list-"));
 	process.env.AF_CACHE_DIR = testDir;
 	// Prevent tests from reading the real ~/.cache/af tasks cache
@@ -21,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	setSystemTime();
 	rmSync(testDir, { recursive: true, force: true });
 	if (oldCacheDir === undefined) delete process.env.AF_CACHE_DIR;
 	else process.env.AF_CACHE_DIR = oldCacheDir;

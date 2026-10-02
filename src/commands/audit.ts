@@ -3,6 +3,7 @@ import { createClient } from "../lib/api/client";
 import { auditDiscrepancies, auditStatusCounts } from "../lib/audit";
 import { occurrenceReadArgs, readOccurrences } from "../lib/occurrence-read";
 import { buildReviewEnvelope } from "../lib/review-envelope";
+import { readTasks } from "../lib/tasks";
 import { readFailure } from "./cal";
 
 export const auditCommand = defineCommand({
@@ -13,8 +14,17 @@ export const auditCommand = defineCommand({
 	args: occurrenceReadArgs,
 	run: async ({ args }) => {
 		try {
+			const client = createClient();
 			const { snapshot, input, query, pairs, window, minMinutes } =
-				await readOccurrences(createClient(), args);
+				await readOccurrences(client, args);
+			// Status diagnostics need retained trash, even though the timeline excludes it.
+			const statusInput = {
+				...input,
+				tasks:
+					args.tasks === false
+						? []
+						: await readTasks(client, { includeTrashed: true }),
+			};
 			const occurrences = pairs.map((p) => p.occurrence);
 			const fetch_times = Object.fromEntries(
 				(["events", "time_slots", "tasks", "calendars"] as const).map(
@@ -56,7 +66,7 @@ export const auditCommand = defineCommand({
 				},
 				discrepancies: {
 					...auditDiscrepancies(occurrences),
-					statuses: auditStatusCounts(input, query, occurrences),
+					statuses: auditStatusCounts(statusInput, query, occurrences),
 				},
 				effective: envelope.occurrences,
 			};

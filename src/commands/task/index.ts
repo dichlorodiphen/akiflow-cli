@@ -442,7 +442,13 @@ export const taskPlanCommand = defineCommand({
 			);
 			return;
 		}
-		await submitTaskMutation(client, "task plan", context.args, updatePayload, "plan");
+		await submitTaskMutation(
+			client,
+			"task plan",
+			context.args,
+			updatePayload,
+			"plan",
+		);
 	},
 });
 
@@ -491,7 +497,10 @@ export const taskSnoozeCommand = defineCommand({
 		);
 
 		// Parse duration into value + unit to decide elapsed vs wall-day basis.
-		const durationMatch = durationArg.trim().toLowerCase().match(/^(\d+)\s*([mhdw])$/);
+		const durationMatch = durationArg
+			.trim()
+			.toLowerCase()
+			.match(/^(\d+)\s*([mhdw])$/);
 		if (!durationMatch) {
 			console.error(
 				`Error: Invalid duration format "${durationArg}". Expected format: <number><unit> (e.g., 1h, 2d, 1w)`,

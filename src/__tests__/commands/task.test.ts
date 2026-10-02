@@ -54,19 +54,19 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [
-						{
-							id: "task-uuid-1",
-							title: "Updated task",
-							duration: 2700,
-							priority: 2,
-						},
-					],
-				}),
-				{ status: 200 },
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [
+							{
+								id: "task-uuid-1",
+								title: "Updated task",
+								duration: 2700,
+								priority: 2,
+							},
+						],
+					}),
+					{ status: 200 },
 				),
 			),
 		);
@@ -85,7 +85,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0]).toMatchObject({
 			id: "task-uuid-1",
@@ -105,14 +107,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -126,7 +128,9 @@ describe("taskPlanCommand", () => {
 
 		// then
 		expect(fetchSpy).toHaveBeenCalled();
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe("2026-02-10");
 		expect(requestBody[0].datetime).toBeUndefined();
@@ -146,14 +150,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -166,7 +170,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -185,14 +191,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -205,7 +211,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -220,14 +228,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -240,7 +248,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe("2026-02-10");
 		expect(requestBody[0].datetime).toBeTruthy();
@@ -260,14 +270,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -280,7 +290,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(requestBody[0].datetime).toBeTruthy();
@@ -301,14 +313,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -321,7 +333,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(requestBody[0].datetime).toBeTruthy();
@@ -341,14 +355,14 @@ describe("taskPlanCommand", () => {
 		fetchSpy.mockImplementation(() =>
 			Promise.resolve(
 				new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [{ id: "task-uuid-1" }],
-				}),
-				{
-					status: 200,
-				},
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [{ id: "task-uuid-1" }],
+					}),
+					{
+						status: 200,
+					},
 				),
 			),
 		);
@@ -361,7 +375,9 @@ describe("taskPlanCommand", () => {
 		} as any);
 
 		// then
-		const fetchCall = fetchSpy.mock.calls.find((c: any) => c[1]?.body) ?? fetchSpy.mock.calls[0];
+		const fetchCall =
+			fetchSpy.mock.calls.find((c: any) => c[1]?.body) ??
+			fetchSpy.mock.calls[0];
 		const requestBody = JSON.parse(fetchCall[1]?.body as string);
 		expect(requestBody[0].date).toBe(expectedDate);
 		expect(requestBody[0].datetime).toBeTruthy();

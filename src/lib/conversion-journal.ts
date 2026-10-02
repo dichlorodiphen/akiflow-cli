@@ -87,9 +87,7 @@ export function recordConversion(entry: ConversionEntry): void {
 /** Find the target event ID for a source task, or null if not converted. */
 export function findTargetForSource(sourceTaskId: string): string | null {
 	const journal = loadConversionJournal();
-	const entry = journal.entries.find(
-		(e) => e.source_task_id === sourceTaskId,
-	);
+	const entry = journal.entries.find((e) => e.source_task_id === sourceTaskId);
 	return entry?.target_event_id ?? null;
 }
 

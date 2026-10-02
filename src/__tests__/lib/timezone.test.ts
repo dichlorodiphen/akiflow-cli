@@ -71,23 +71,13 @@ describe("parseCalendarDate", () => {
 describe("zonedTimeToUtc", () => {
 	test("converts LA time to UTC correctly (PDT, UTC-7)", () => {
 		// 2026-09-30 09:00 PDT = 16:00 UTC
-		const result = zonedTimeToUtc(
-			"2026-09-30",
-			9,
-			0,
-			"America/Los_Angeles",
-		);
+		const result = zonedTimeToUtc("2026-09-30", 9, 0, "America/Los_Angeles");
 		expect(result).toBe("2026-09-30T16:00:00.000Z");
 	});
 
 	test("converts LA time to UTC correctly (PST, UTC-8)", () => {
 		// 2026-01-15 09:00 PST = 17:00 UTC
-		const result = zonedTimeToUtc(
-			"2026-01-15",
-			9,
-			0,
-			"America/Los_Angeles",
-		);
+		const result = zonedTimeToUtc("2026-01-15", 9, 0, "America/Los_Angeles");
 		expect(result).toBe("2026-01-15T17:00:00.000Z");
 	});
 
@@ -100,12 +90,7 @@ describe("zonedTimeToUtc", () => {
 
 	test("accepts time after DST gap", () => {
 		// 3:30 AM exists (PDT, UTC-7)
-		const result = zonedTimeToUtc(
-			"2026-03-08",
-			3,
-			30,
-			"America/Los_Angeles",
-		);
+		const result = zonedTimeToUtc("2026-03-08", 3, 30, "America/Los_Angeles");
 		expect(result).toBe("2026-03-08T10:30:00.000Z");
 	});
 
@@ -155,8 +140,7 @@ describe("zonedTimeToUtc", () => {
 			"America/Los_Angeles",
 			"second",
 		);
-		const diff =
-			new Date(second).getTime() - new Date(first).getTime();
+		const diff = new Date(second).getTime() - new Date(first).getTime();
 		expect(diff).toBe(3600000);
 	});
 
@@ -178,12 +162,7 @@ describe("zonedTimeToUtc", () => {
 		// should be identical regardless of host TZ. We verify by checking
 		// a known conversion is correct (the actual TZ-independence is
 		// tested by running the suite under TZ=UTC and TZ=America/Los_Angeles).
-		const result = zonedTimeToUtc(
-			"2026-09-30",
-			9,
-			0,
-			"America/Los_Angeles",
-		);
+		const result = zonedTimeToUtc("2026-09-30", 9, 0, "America/Los_Angeles");
 		expect(result).toBe("2026-09-30T16:00:00.000Z");
 	});
 });

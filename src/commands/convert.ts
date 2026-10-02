@@ -710,8 +710,7 @@ export const convertTasksCommand = defineCommand({
 		for (const candidate of candidates) {
 			const targetId =
 				candidate.match?.id ??
-				receipts.find((r) => r.event_id === candidate.payload.id)
-					?.event_id ??
+				receipts.find((r) => r.event_id === candidate.payload.id)?.event_id ??
 				candidate.payload.id;
 			const receipt = receipts.find((r) => r.event_id === targetId);
 			const wasMatched = !!candidate.match;

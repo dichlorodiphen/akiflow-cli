@@ -7,10 +7,12 @@ import { cal } from "../../commands/cal";
 import { createClient } from "../../lib/api/client";
 import type { Calendar, Event, Task, TimeSlot } from "../../lib/api/types";
 import * as cache from "../../lib/cache";
+import * as taskRepository from "../../lib/tasks";
 
 describe("cal command", () => {
 	let mockGetTimeSlots: ReturnType<typeof spyOn>;
 	let mockReadResource: ReturnType<typeof spyOn>;
+	let mockReadTasks: ReturnType<typeof spyOn>;
 
 	beforeEach(() => {
 		mockGetTimeSlots = spyOn(
@@ -18,11 +20,13 @@ describe("cal command", () => {
 			"getTimeSlots",
 		);
 		mockReadResource = spyOn(cache, "snapshotResources");
+		mockReadTasks = spyOn(taskRepository, "readTasks");
 	});
 
 	afterEach(() => {
 		mockGetTimeSlots.mockRestore();
 		mockReadResource.mockRestore();
+		mockReadTasks.mockRestore();
 	});
 
 	const mockTimeSlots: TimeSlot[] = [
@@ -93,6 +97,7 @@ describe("cal command", () => {
 		tasks?: Task[];
 		calendars?: Calendar[];
 	} = {}): void {
+		mockReadTasks.mockResolvedValue(tasks);
 		mockReadResource.mockResolvedValue({
 			data: { events, time_slots: slots, tasks, calendars, accounts: [] },
 			generation: "gen-1",

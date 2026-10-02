@@ -1,15 +1,20 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { runMergedCalendar } from "../../commands/cal";
 import * as cache from "../../lib/cache";
+import * as taskRepository from "../../lib/tasks";
 import { event, instant, slot, task } from "../lib/occurrence-fixtures";
 
+let readTasks: ReturnType<typeof spyOn>;
 const snapshot = spyOn(cache, "snapshotResources");
 const log = spyOn(console, "log").mockImplementation(() => {});
 afterEach(() => {
 	snapshot.mockReset();
+	readTasks?.mockRestore();
 	log.mockClear();
 });
 function seed() {
+	const tasks = [task({ duration: 10800 })];
+	readTasks = spyOn(taskRepository, "readTasks").mockResolvedValue(tasks);
 	snapshot.mockResolvedValue({
 		data: {
 			events: [event({ task_id: "t" })],
@@ -19,7 +24,7 @@ function seed() {
 					end_time: instant(11).toISOString(),
 				}),
 			],
-			tasks: [task({ duration: 10800 })],
+			tasks,
 			calendars: [
 				{ id: "cal", title: "Primary", hidden_at: null, deleted_at: null },
 			],

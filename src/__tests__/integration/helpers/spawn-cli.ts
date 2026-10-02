@@ -37,7 +37,6 @@ export async function spawnCli(
 		env: {
 			...process.env,
 			...(opts.env ?? {}),
-
 		},
 		stdout: "pipe",
 		stderr: "pipe",

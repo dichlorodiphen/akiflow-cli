@@ -214,7 +214,7 @@ describe("convert tasks command", () => {
 		await convertTasksCommand.run!({
 			args: {
 				to: "events",
-					all: true,
+				all: true,
 				search: "Portland trip",
 				execute: false,
 				_: [],
@@ -302,8 +302,13 @@ describe("convert tasks command", () => {
 		);
 		await expectReceiptOnlyCommandFailure(() =>
 			convertTasksCommand.run!({
-				args: { to: "events",
-					all: true, execute: true, "delete-source": true, _: [] },
+				args: {
+					to: "events",
+					all: true,
+					execute: true,
+					"delete-source": true,
+					_: [],
+				},
 				rawArgs: [],
 			} as any),
 		);
@@ -354,7 +359,7 @@ describe("convert tasks command", () => {
 		await convertTasksCommand.run!({
 			args: {
 				to: "events",
-					all: true,
+				all: true,
 				execute: true,
 				"delete-source": true,
 				_: [],
@@ -447,8 +452,7 @@ describe("convert tasks command", () => {
 
 		try {
 			await convertTasksCommand.run!({
-				args: { to: "events",
-					all: true, _: [] },
+				args: { to: "events", all: true, _: [] },
 				rawArgs: [],
 			} as any);
 		} catch {}

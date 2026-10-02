@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import fixtures from "./fixtures/tasks.json";
+import { eventLifecycle } from "./helpers/event-lifecycle";
 import { FakeAkiflowServer } from "./helpers/fake-server";
 import { loadAllFixtures } from "./helpers/load-fixtures";
 import { spawnCli } from "./helpers/spawn-cli";
 import { makeTestEnv } from "./helpers/test-env";
-import { eventLifecycle } from "./helpers/event-lifecycle";
 
 const id = "11111111-2222-4333-8444-555555555555";
 let server: FakeAkiflowServer;
@@ -218,9 +218,7 @@ describe("unified repository command regressions", () => {
 			) + 1;
 		const rejected = await cli(["task", "complete", String(virtualShortId)]);
 		expect(rejected.exitCode).not.toBe(0);
-		expect(rejected.stderr).toContain(
-			"Synthetic task ID",
-		);
+		expect(rejected.stderr).toContain("Synthetic task ID");
 		expect(existsSync(join(env.cacheDir, "pending-tasks.json"))).toBe(false);
 		const completed = await cli(["task", "complete", id]);
 		expect(completed.exitCode, completed.stderr).toBe(0);
@@ -250,7 +248,9 @@ describe("unified repository command regressions", () => {
 		const complete = await cli(["task", "complete", String(short)]);
 		expect(complete.exitCode, complete.stderr).toBe(0);
 		for (let i = 0; i < 2; i++) {
-			expect((await list()).find((t) => t.id === created.result.id)).toMatchObject({
+			expect(
+				(await list()).find((t) => t.id === created.result.id),
+			).toMatchObject({
 				done: true,
 				pending: true,
 			});
@@ -338,9 +338,7 @@ describe("unified repository command regressions", () => {
 			for (const identifier of [virtual, "1"]) {
 				const result = await cli(["task", command, identifier, ...flags]);
 				expect(result.exitCode).not.toBe(0);
-				expect(result.stderr).toContain(
-					"Synthetic task ID",
-				);
+				expect(result.stderr).toContain("Synthetic task ID");
 			}
 		}
 		const slot = await cli([
@@ -357,9 +355,7 @@ describe("unified repository command regressions", () => {
 			virtual,
 		]);
 		expect(slot.exitCode).not.toBe(0);
-		expect(slot.stderr).toContain(
-			"Synthetic task ID",
-		);
+		expect(slot.stderr).toContain("Synthetic task ID");
 		expect(server.requests.filter((r) => r.method !== "GET")).toHaveLength(0);
 		expect(existsSync(join(env.cacheDir, "pending-tasks.json"))).toBe(false);
 	}, 20_000);

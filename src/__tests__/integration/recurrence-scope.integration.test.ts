@@ -7,8 +7,8 @@
  * - --scope series delete does not loop instances
  */
 import { describe, expect, test } from "bun:test";
-import { localCliSession } from "./helpers/run-local-cli";
 import { FakeAkiflowServer } from "./helpers/fake-server";
+import { localCliSession } from "./helpers/run-local-cli";
 
 function makeServer() {
 	const server = new FakeAkiflowServer();

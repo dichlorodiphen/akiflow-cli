@@ -24,7 +24,10 @@ describe("af command surface", () => {
 			expect(result.exitCode).toBe(2);
 			// citty colorizes the command name when stderr is a TTY; strip
 			// ANSI codes so this passes with and without color.
-			const plain = result.stderr.replace(/\[[0-9;]*m/g, "");
+			const plain = result.stderr.replace(
+				new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"),
+				"",
+			);
 			expect(plain).toContain(`Unknown command ${command}`);
 		}
 	});

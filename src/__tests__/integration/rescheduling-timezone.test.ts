@@ -22,7 +22,11 @@ describe("Workstream F: rescheduling and timezone primitives", () => {
 	// Snooze with day unit uses wall-day basis (preserves wall-clock time).
 	test("snooze --duration 1d preserves wall-clock time (wall-day basis)", async () => {
 		// Task at 2026-09-30 09:00 PDT (16:00 UTC)
-		server.scenarios.snooze(taskId, "2026-09-30T16:00:00.000Z", "America/Los_Angeles");
+		server.scenarios.snooze(
+			taskId,
+			"2026-09-30T16:00:00.000Z",
+			"America/Los_Angeles",
+		);
 		const result = await cli.run([
 			"task",
 			"snooze",
@@ -43,7 +47,11 @@ describe("Workstream F: rescheduling and timezone primitives", () => {
 	// Snooze across DST spring-forward: wall-clock preserved (1d = same time next day).
 	test("snooze 1d across spring-forward preserves wall-clock", async () => {
 		// Task at 2026-03-07 09:00 PST (17:00 UTC), day before spring-forward
-		server.scenarios.snooze(taskId, "2026-03-07T17:00:00.000Z", "America/Los_Angeles");
+		server.scenarios.snooze(
+			taskId,
+			"2026-03-07T17:00:00.000Z",
+			"America/Los_Angeles",
+		);
 		const result = await cli.run([
 			"task",
 			"snooze",
@@ -62,7 +70,11 @@ describe("Workstream F: rescheduling and timezone primitives", () => {
 
 	// Snooze with hour unit uses elapsed basis.
 	test("snooze --duration 1h uses elapsed basis", async () => {
-		server.scenarios.snooze(taskId, "2026-09-30T16:00:00.000Z", "America/Los_Angeles");
+		server.scenarios.snooze(
+			taskId,
+			"2026-09-30T16:00:00.000Z",
+			"America/Los_Angeles",
+		);
 		const result = await cli.run([
 			"task",
 			"snooze",
@@ -81,7 +93,11 @@ describe("Workstream F: rescheduling and timezone primitives", () => {
 
 	// Plan with --clear-time converts to date-only.
 	test("plan --clear-time converts timed task to date-only", async () => {
-		server.scenarios.snooze(taskId, "2026-09-30T16:00:00.000Z", "America/Los_Angeles");
+		server.scenarios.snooze(
+			taskId,
+			"2026-09-30T16:00:00.000Z",
+			"America/Los_Angeles",
+		);
 		const result = await cli.run([
 			"task",
 			"plan",
@@ -101,7 +117,11 @@ describe("Workstream F: rescheduling and timezone primitives", () => {
 
 	// Plan with --date and --at uses explicit timezone.
 	test("plan --date --at --timezone interprets time in given zone", async () => {
-		server.scenarios.snooze(taskId, "2026-09-30T16:00:00.000Z", "America/Los_Angeles");
+		server.scenarios.snooze(
+			taskId,
+			"2026-09-30T16:00:00.000Z",
+			"America/Los_Angeles",
+		);
 		const result = await cli.run([
 			"task",
 			"plan",

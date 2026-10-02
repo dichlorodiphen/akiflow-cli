@@ -18,7 +18,9 @@ describe("platform-config", () => {
 		// Use an isolated cache dir to avoid interference from the generational
 		// pointer (C) that may exist in the real cache dir.
 		process.env.AF_CACHE_DIR = `/tmp/af-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-		expect(cacheFile("tasks.jsonl")).toBe(`${process.env.AF_CACHE_DIR}/tasks.jsonl`);
+		expect(cacheFile("tasks.jsonl")).toBe(
+			`${process.env.AF_CACHE_DIR}/tasks.jsonl`,
+		);
 	});
 
 	test("respects AF_CACHE_DIR override", () => {

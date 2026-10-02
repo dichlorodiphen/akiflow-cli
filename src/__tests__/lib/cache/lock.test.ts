@@ -278,8 +278,7 @@ describe("lock ownership and recovery", () => {
 			{ stdout: "ignore", stderr: "pipe" },
 		);
 		try {
-			for (let i = 0; i < 100 && !existsSync(path); i++)
-				await Bun.sleep(10);
+			for (let i = 0; i < 100 && !existsSync(path); i++) await Bun.sleep(10);
 			expect(existsSync(path)).toBe(true);
 			const start = Date.now();
 			await expect(withLock(path, async () => {})).rejects.toThrow(

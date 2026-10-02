@@ -26,7 +26,9 @@ export function validateRRule(input: string): string {
 	if (!trimmed) {
 		throw new Error("RRULE must not be empty");
 	}
-	const body = trimmed.startsWith("RRULE:") ? trimmed.slice("RRULE:".length) : trimmed;
+	const body = trimmed.startsWith("RRULE:")
+		? trimmed.slice("RRULE:".length)
+		: trimmed;
 	let rule: RRule;
 	try {
 		rule = rrulestr(body, { forceset: false }) as RRule;

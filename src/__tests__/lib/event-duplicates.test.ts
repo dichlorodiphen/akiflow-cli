@@ -194,7 +194,11 @@ describe("detectPossibleReshapes", () => {
 				start_time: "2026-10-01T00:45:00.000Z",
 				end_time: "2026-10-01T01:15:00.000Z",
 			}),
-			event({ id: "tidus-1", title: "Walk + feed Tidus", calendar_id: "cal-2" }),
+			event({
+				id: "tidus-1",
+				title: "Walk + feed Tidus",
+				calendar_id: "cal-2",
+			}),
 		]);
 		expect(groups).toHaveLength(0);
 	});
