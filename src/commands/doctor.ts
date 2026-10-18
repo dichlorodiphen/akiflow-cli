@@ -6,6 +6,7 @@ import { type BrowserType, getAllBrowserPaths } from "../lib/browser-paths";
 import { readAllRecords } from "../lib/cache/jsonl-store";
 import { readTokens } from "../lib/cache/tokens";
 import { cacheFile, cachePath } from "../lib/platform-config";
+import { profileStatus } from "../lib/profiles";
 
 interface BrowserReport {
 	name: BrowserType;
@@ -14,6 +15,7 @@ interface BrowserReport {
 }
 
 interface DoctorReport {
+	profile: ReturnType<typeof profileStatus>;
 	checks?: Array<{
 		check: string;
 		severity: "ok" | "warning" | "critical";
@@ -58,6 +60,7 @@ export async function runDoctor(opts: {
 }): Promise<DoctorReport> {
 	const credentials = await checkCredentials();
 	const report: DoctorReport = {
+		profile: profileStatus(),
 		credentials,
 		browsers: checkBrowsers(),
 		cache: await checkCache(),
@@ -248,6 +251,7 @@ function printReport(r: DoctorReport): void {
 	};
 	line(`af doctor — diagnostic report (${new Date().toISOString()})\n`);
 
+	line(`Profile: ${r.profile.name} (default: ${r.profile.default})`);
 	line("Credentials");
 	line(
 		`  credentials.json                  ${r.credentials.has_creds ? "✓ present" : "✗ MISSING"}`,

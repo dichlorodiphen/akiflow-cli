@@ -1,6 +1,8 @@
 import { chmod, mkdir, rename, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { withLock } from "../cache/lock";
+import { configPath } from "../profiles";
+import { boundIdentity, tokenUserId } from "./identity";
 
 export interface Credentials {
 	token: string;
@@ -12,15 +14,16 @@ export interface Credentials {
 function getConfigPath(): string {
 	// Allow tests/advanced users to override config dir.
 	// Default: ~/.config/af
-	return process.env.AF_CONFIG_DIR ?? join(homedir(), ".config", "af");
+	return configPath();
 }
 
-function getCredentialsPath(): string {
-	return join(getConfigPath(), "credentials.json");
+function getCredentialsPath(directory = getConfigPath()): string {
+	return join(directory, "credentials.json");
 }
 
-async function ensureConfigDirectory(): Promise<void> {
-	const configPath = getConfigPath();
+async function ensureConfigDirectory(
+	configPath = getConfigPath(),
+): Promise<void> {
 	await mkdir(configPath, { recursive: true, mode: 0o700 });
 	await chmod(configPath, 0o700);
 }
@@ -30,7 +33,14 @@ export async function saveCredentials(
 	clientId?: string,
 	expiryTimestamp?: number,
 	refreshToken?: string,
+	directory = getConfigPath(),
 ): Promise<void> {
+	const owner = boundIdentity(directory);
+	const claim = tokenUserId(token);
+	if (owner !== null && claim !== owner)
+		throw new Error(
+			"Credentials do not match the verified profile identity; existing credentials retained",
+		);
 	const credentials: Credentials = {
 		token,
 		clientId: clientId || crypto.randomUUID(),
@@ -38,8 +48,8 @@ export async function saveCredentials(
 		refreshToken,
 	};
 
-	await ensureConfigDirectory();
-	const credentialsPath = getCredentialsPath();
+	await ensureConfigDirectory(directory);
+	const credentialsPath = getCredentialsPath(directory);
 	const temporaryPath = `${credentialsPath}.${crypto.randomUUID()}.tmp`;
 	try {
 		await writeFile(temporaryPath, JSON.stringify(credentials, null, 2), {
@@ -53,8 +63,10 @@ export async function saveCredentials(
 	}
 }
 
-export async function loadCredentials(): Promise<Credentials | null> {
-	const credentialsFile = Bun.file(getCredentialsPath());
+export async function loadCredentials(
+	directory = getConfigPath(),
+): Promise<Credentials | null> {
+	const credentialsFile = Bun.file(getCredentialsPath(directory));
 
 	if (!(await credentialsFile.exists())) {
 		return null;
@@ -78,14 +90,18 @@ export async function loadCredentials(): Promise<Credentials | null> {
 					!credentials.refreshToken.trim()))
 		)
 			return null;
+		const owner = boundIdentity(directory);
+		if (owner !== null && tokenUserId(credentials.token) !== owner) return null;
 		return credentials;
 	} catch {
 		return null;
 	}
 }
 
-export async function clearCredentials(): Promise<void> {
-	const credentialsPath = getCredentialsPath();
+export async function clearCredentials(
+	directory = getConfigPath(),
+): Promise<void> {
+	const credentialsPath = getCredentialsPath(directory);
 
 	try {
 		await unlink(credentialsPath);
@@ -100,4 +116,12 @@ export async function clearCredentials(): Promise<void> {
 		}
 		throw error;
 	}
+}
+
+/** Serialize refresh-token rotation across processes for one login only. */
+export async function withCredentialsLock<T>(
+	fn: () => Promise<T>,
+	directory = getConfigPath(),
+): Promise<T> {
+	return withLock(`${directory}.credentials.lock`, fn);
 }

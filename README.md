@@ -201,3 +201,41 @@ Build verification uses Bun 1.3.14 and CI runs on Linux and macOS in UTC and
 America/Los_Angeles. `node_modules` is generated locally and must not be committed
 as a machine-specific symlink. The package version identifies the release version;
 for local patched builds, retain the source revision and patch alongside the binary.
+
+### Separate Akiflow login profiles
+
+The existing login remains the `default` profile with its original config/cache
+paths. Named profiles start empty; creating or switching profiles never copies
+credentials, calendar mappings, caches, numbered-task context, pending writes, or
+mutation journals.
+
+```bash
+af profile create work
+af --profile work auth login
+af --profile work auth status --json
+af profile use work
+af profile status --json
+af --profile default task list
+```
+
+Selection precedence is `--profile NAME`, then `AF_PROFILE`, then the saved default
+(`default` initially). The selection is pinned for each command; changing the saved
+default affects future invocations. `AF_CONFIG_DIR` and `AF_CACHE_DIR` override the
+base roots: named profile data lives under each root's `profiles/NAME/`. Existing
+`config.json` timezone settings remain profile-local. `profile list`, `profile
+status`, `auth status --json` and `doctor --json` identify the selected profile.
+
+A profile represents a separate **Akiflow login**, not a Google account connected
+inside that login. Connected provider accounts retain their Akiflow account IDs;
+use explicit account/calendar selectors and provider bindings for those. Login
+profiles cannot make a disconnected or read-only provider writable. Profile names
+are restricted to letters, digits, `_` and `-`; there is no profile-delete command,
+so switching cannot erase unresolved writes or credentials.
+
+`af auth verify --json` checks the authenticated Akiflow web identity and binds the
+current profile to that user. Browser login verifies this identity before importing
+credentials. A bound profile refuses another user's credentials, including rotated
+tokens with a conflicting user claim; logout retains the binding and cached data.
+Use a new profile to sign into a different Akiflow identity. Legacy cache records
+are checked for conflicting owners when binding. Decoding a JWT is only a local
+mismatch guard; the authenticated web identity response establishes the binding.

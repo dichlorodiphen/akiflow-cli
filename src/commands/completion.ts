@@ -58,12 +58,15 @@ _af_completion() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   words=("\${COMP_WORDS[0]}")
   cword=$COMP_CWORD
-  # Remove only complete global booleans before the cursor. Preserve all
-  # other words, including inline string values containing flag text.
+  # Remove complete global options before the cursor; keep command positions.
   for ((i=1; i<\${#COMP_WORDS[@]}; i++)); do
     if (( i < COMP_CWORD )); then
       case "\${COMP_WORDS[i]}" in
         --) return 0 ;;
+        --profile)
+          (( i + 1 < COMP_CWORD )) || return 0
+          ((i++)); ((cword-=2)); continue ;;
+        --profile=*) ((cword--)); continue ;;
         --envelope|--envelope=true|--envelope=false|--no-envelope|--no-envelope=true|--no-envelope=false)
           ((cword--)); continue ;;
       esac
@@ -116,6 +119,10 @@ _af() {
     if (( i < CURRENT )); then
       case "\${words[i]}" in
         --) return ;;
+        --profile)
+          (( i + 1 < CURRENT )) || return 0
+          ((i++)); ((command_current-=2)); continue ;;
+        --profile=*) ((command_current--)); continue ;;
         --envelope|--envelope=true|--envelope=false|--no-envelope|--no-envelope=true|--no-envelope=false)
           ((command_current--)); continue ;;
       esac
@@ -153,13 +160,24 @@ function generateFishCompletion(COMMANDS: Record<string, CommandNode>): string {
 function __af_tokens
     set -l tokens (commandline -opc)
     contains -- -- $tokens; and return 1
+    set -l skip_profile 0
     for token in $tokens
+        if test $skip_profile -eq 1
+            set skip_profile 0
+            continue
+        end
         switch $token
+            case --profile
+                set skip_profile 1
+                continue
+            case '--profile=*'
+                continue
             case --envelope --envelope=true --envelope=false --no-envelope --no-envelope=true --no-envelope=false
                 continue
         end
         printf '%s\\n' "$token"
     end
+    test $skip_profile -eq 0; or return 1
 end
 function __af_path_flags
     set -l tokens (__af_tokens); or return 1

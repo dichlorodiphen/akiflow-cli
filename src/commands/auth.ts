@@ -2,18 +2,47 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { defineCommand } from "citty";
 import { scanBrowsers } from "../lib/auth/extract-token";
+import {
+	bindVerifiedIdentity,
+	boundIdentity,
+	verifyAuthenticatedIdentity,
+} from "../lib/auth/identity";
 import { refreshAccessToken } from "../lib/auth/refresh";
 import {
 	clearCredentials,
 	loadCredentials,
 	saveCredentials,
+	withCredentialsLock,
 } from "../lib/auth/storage";
+import { profileStatus } from "../lib/profiles";
 
 /**
  * Show authentication status
  */
-async function showStatus(): Promise<void> {
+async function showStatus(json = false): Promise<void> {
 	const credentials = await loadCredentials();
+	if (json) {
+		console.log(
+			JSON.stringify(
+				{
+					profile: profileStatus(),
+					authenticated: Boolean(credentials),
+					identity_user_id: boundIdentity(),
+					expires_at: credentials
+						? new Date(credentials.expiryTimestamp).toISOString()
+						: null,
+					expired: credentials
+						? Date.now() > credentials.expiryTimestamp
+						: null,
+					auto_refresh: Boolean(credentials?.refreshToken),
+				},
+				null,
+				2,
+			),
+		);
+		return;
+	}
+	console.log(`Profile: ${profileStatus().name}`);
 
 	if (!credentials) {
 		console.log("Not authenticated");
@@ -21,13 +50,11 @@ async function showStatus(): Promise<void> {
 		return;
 	}
 
-	const tokenPreview = `${credentials.token.slice(0, 20)}...`;
 	const expiryDate = new Date(credentials.expiryTimestamp);
 	const isExpired = Date.now() > credentials.expiryTimestamp;
 	const expiryStatus = isExpired ? "EXPIRED" : "valid";
 
 	console.log(`Status: ${expiryStatus}`);
-	console.log(`Token: ${tokenPreview}`);
 	console.log(`Client ID: ${credentials.clientId}`);
 	console.log(`Expires: ${expiryDate.toISOString()}`);
 	console.log(
@@ -98,18 +125,21 @@ async function interactiveAuth(): Promise<void> {
 	}
 
 	const selected = tokens[selectedIndex]!;
-	const tokenPreview = `${selected.token.slice(0, 20)}...`;
 
 	console.log(`\nSelected: ${selected.browser}`);
-	console.log(`Token preview: ${tokenPreview}`);
 
 	const expiryTimestamp = selected.expiresAt?.getTime();
-	await saveCredentials(
-		selected.token,
-		undefined,
-		expiryTimestamp,
-		selected.refreshToken,
-	);
+	const identity = await verifyAuthenticatedIdentity(selected.token, "10");
+	await withCredentialsLock(async () => {
+		const previous = await loadCredentials();
+		bindVerifiedIdentity(identity, previous?.token);
+		await saveCredentials(
+			selected.token,
+			undefined,
+			expiryTimestamp,
+			selected.refreshToken,
+		);
+	});
 
 	console.log("\nAuthentication successful!");
 	if (selected.refreshToken) {
@@ -124,6 +154,10 @@ async function interactiveAuth(): Promise<void> {
  * Refresh authentication (force new token extraction)
  */
 async function refreshAuth(): Promise<void> {
+	await withCredentialsLock(refreshAuthLocked);
+}
+
+async function refreshAuthLocked(): Promise<void> {
 	console.log("Refreshing authentication...");
 
 	const credentials = await loadCredentials();
@@ -164,7 +198,7 @@ async function logoutAuth(): Promise<void> {
 	}
 
 	console.log("Clearing stored credentials...");
-	await clearCredentials();
+	await withCredentialsLock(() => clearCredentials());
 
 	console.log("Logged out successfully");
 }
@@ -174,8 +208,14 @@ export const authStatusCommand = defineCommand({
 		name: "status",
 		description: "Show current authentication status",
 	},
-	run: async () => {
-		await showStatus();
+	args: {
+		json: {
+			type: "boolean",
+			description: "Output status as JSON without credentials",
+		},
+	},
+	run: async (context) => {
+		await showStatus(context?.args?.json);
 	},
 });
 
@@ -217,6 +257,39 @@ export const authCommand = defineCommand({
 	},
 	subCommands: {
 		status: authStatusCommand,
+		verify: defineCommand({
+			meta: {
+				name: "verify",
+				description:
+					"Verify server identity and bind this profile without changing credentials",
+			},
+			args: { json: { type: "boolean", description: "Output JSON" } },
+			run: async ({ args }) => {
+				const credentials = await loadCredentials();
+				if (!credentials) throw new Error("No credentials to verify");
+				const owner = await verifyAuthenticatedIdentity(
+					credentials.token,
+					credentials.clientId,
+				);
+				await withCredentialsLock(async () => {
+					const current = await loadCredentials();
+					if (current?.token !== credentials.token)
+						throw new Error(
+							"Credentials changed during verification; retry verification",
+						);
+					bindVerifiedIdentity(owner, credentials.token);
+				});
+				console.log(
+					args.json
+						? JSON.stringify({
+								profile: profileStatus(),
+								user_id: owner,
+								verified: true,
+							})
+						: `Verified profile ${profileStatus().name}: Akiflow user ${owner}`,
+				);
+			},
+		}),
 		login: authLoginCommand,
 		logout: authLogoutCommand,
 		refresh: authRefreshCommand,

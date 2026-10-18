@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { profileCachePath } from "./profiles";
 
 /**
  * Cache directory root for af.
@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
  * Override: $AF_CACHE_DIR (used by tests + advanced users).
  */
 export function cachePath(): string {
-	return process.env.AF_CACHE_DIR ?? join(homedir(), ".cache", "af");
+	return profileCachePath();
 }
 
 export function cacheFile(name: string): string {

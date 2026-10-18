@@ -352,6 +352,16 @@ for (const shell of ["bash", "zsh"] as const) {
 			const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 			for (const specimen of [
 				{ words: ["af", "--envelope", ""], wanted: "task" },
+				{ words: ["af", "--profile", "work", ""], wanted: "task" },
+				{
+					words: ["af", "--profile=work", "event", "attendees", "add", ""],
+					wanted: "--send-updates",
+				},
+				{
+					words: ["af", "event", "--profile", "work", "attendees", "add", ""],
+					wanted: "--send-updates",
+				},
+				{ words: ["af", "--profile", ""], wanted: undefined },
 				{
 					words: ["af", "--no-envelope=false", "event", "attendees", "add", ""],
 					wanted: "--send-updates",

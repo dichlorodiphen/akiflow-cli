@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { getLocalTimezone } from "./date-parser";
+import { configPath } from "./profiles";
 import { validateTimezone } from "./timezone";
 
 export interface AfProfile {
@@ -11,7 +11,7 @@ export interface AfProfile {
 }
 
 function getConfigPath(): string {
-	return process.env.AF_CONFIG_DIR ?? join(homedir(), ".config", "af");
+	return configPath();
 }
 
 function getProfilePath(): string {

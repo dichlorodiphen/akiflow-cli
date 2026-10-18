@@ -18,6 +18,10 @@ export interface CommandNode {
 }
 
 export const GLOBAL_ARGS: ArgsDef = {
+	profile: {
+		type: "string",
+		description: "Akiflow login profile (flag > AF_PROFILE > saved default)",
+	},
 	envelope: {
 		type: "boolean",
 		description: "Use version 1 JSON output envelope (migration opt-in)",

@@ -10,6 +10,7 @@ import { completionCommand } from "./commands/completion";
 import { convertCommand } from "./commands/convert";
 import { doctorCommand } from "./commands/doctor";
 import { eventCommand } from "./commands/event";
+import { profileCommand } from "./commands/profile";
 import { projectCommand } from "./commands/project";
 import { reconcileCommand } from "./commands/reconcile";
 import { refreshCommand } from "./commands/refresh";
@@ -41,6 +42,7 @@ export const main = defineCommand({
 		reconcile: reconcileCommand,
 		calendar: calendarCommand,
 		project: projectCommand,
+		profile: profileCommand,
 		auth: authCommand,
 		cache: cacheCommand,
 		doctor: doctorCommand,

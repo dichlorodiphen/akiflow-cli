@@ -5,6 +5,7 @@ import { main } from "./command-tree";
 import { validateDateSelectors } from "./lib/date-selector";
 import { EXIT_CODES } from "./lib/exit-codes";
 import { installOutputContract, setOutputCommand } from "./lib/output-contract";
+import { selectProfile } from "./lib/profiles";
 import { type ValidatedArgs, validateArgv } from "./lib/strict-args";
 
 const argv = process.argv.slice(2);
@@ -13,6 +14,12 @@ let validated: ValidatedArgs;
 try {
 	validated = await validateArgv(main, argv);
 	setOutputCommand(validated.command);
+	if (!validated.help && !validated.version)
+		selectProfile(
+			typeof validated.values.profile === "string"
+				? validated.values.profile
+				: undefined,
+		);
 	if (
 		!validated.help &&
 		!validated.version &&
@@ -45,7 +52,7 @@ try {
 		console.log(await renderUsage(validated.definition, validated.parent));
 	} else {
 		const flags = Object.entries(validated.values).flatMap(([name, value]) => {
-			if (name === "envelope") return [];
+			if (name === "envelope" || name === "profile") return [];
 			if (typeof value === "boolean")
 				return [value ? `--${name}` : `--no-${name}`];
 			return [`--${name}=${value}`];

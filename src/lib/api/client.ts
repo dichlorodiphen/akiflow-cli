@@ -3,7 +3,12 @@ import {
 	refreshAccessToken,
 	requestTimeoutMs,
 } from "../auth/refresh";
-import { loadCredentials, saveCredentials } from "../auth/storage";
+import {
+	loadCredentials,
+	saveCredentials,
+	withCredentialsLock,
+} from "../auth/storage";
+import { configPath } from "../profiles";
 import { parseEventMutationResult } from "./mutation-results";
 import type {
 	AkiflowCredentials,
@@ -46,8 +51,12 @@ export class AkiflowClient {
 	private platform: string;
 	private refreshPromise: Promise<boolean> | null = null;
 	private readonly readOnly: boolean;
+	private readonly configDirectory: string;
+	private readonly managedCredentials: boolean;
 
 	constructor(options: AkiflowClientOptions = {}) {
+		this.configDirectory = configPath();
+		this.managedCredentials = options.credentials === undefined;
 		this.readOnly = options.readOnly === true;
 		this.credentials = options.credentials ?? null;
 		this.version = options.version ?? DEFAULT_VERSION;
@@ -59,7 +68,7 @@ export class AkiflowClient {
 			return this.credentials;
 		}
 
-		const stored = await loadCredentials();
+		const stored = await loadCredentials(this.configDirectory);
 		if (!stored) {
 			throw new AuthError(
 				"No credentials found. Run 'af auth login' to authenticate.",
@@ -80,7 +89,21 @@ export class AkiflowClient {
 	 */
 	private async refreshToken(): Promise<boolean> {
 		if (this.refreshPromise) return this.refreshPromise;
-		this.refreshPromise = this.performRefresh();
+		this.refreshPromise = withCredentialsLock(async () => {
+			const stored = this.managedCredentials
+				? await loadCredentials(this.configDirectory)
+				: null;
+			if (this.managedCredentials && !stored) return false;
+			if (
+				stored &&
+				this.credentials &&
+				stored.token !== this.credentials.token
+			) {
+				this.credentials = stored;
+				return true;
+			}
+			return this.performRefresh();
+		}, this.configDirectory);
 		try {
 			return await this.refreshPromise;
 		} finally {
@@ -115,6 +138,7 @@ export class AkiflowClient {
 				creds.clientId,
 				replacement.expiresAtMs,
 				replacement.refreshToken,
+				this.configDirectory,
 			);
 			this.credentials = {
 				token: replacement.accessToken,
@@ -190,7 +214,9 @@ export class AkiflowClient {
 				}
 			}
 			if (refreshed) return this.request<TData>(method, path, body, true);
-			const stored = await loadCredentials();
+			const stored = this.managedCredentials
+				? await loadCredentials(this.configDirectory)
+				: null;
 			if (stored && `Bearer ${stored.token}` !== headers.Authorization) {
 				this.credentials = stored;
 				return this.request<TData>(method, path, body, true);
