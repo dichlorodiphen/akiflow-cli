@@ -1,5 +1,6 @@
 import { defineCommand } from "citty";
 import pkg from "../package.json" with { type: "json" };
+import { akiCommand } from "./commands/aki";
 import { auditCommand } from "./commands/audit";
 import { authCommand } from "./commands/auth";
 import { batchCommand } from "./commands/batch";
@@ -42,6 +43,7 @@ export const main = defineCommand({
 		reconcile: reconcileCommand,
 		calendar: calendarCommand,
 		project: projectCommand,
+		aki: akiCommand,
 		profile: profileCommand,
 		auth: authCommand,
 		cache: cacheCommand,

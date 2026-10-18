@@ -176,11 +176,12 @@ export class AkiflowClient {
 		path: string,
 		body?: unknown,
 		retried = false,
+		baseUrl?: string,
 	): Promise<ApiResponse<TData>> {
 		if (this.readOnly && method !== "GET") {
 			throw new Error("Read-only Akiflow client permits only GET requests");
 		}
-		const url = `${process.env.AF_API_BASE ?? BASE_URL}${path}`;
+		const url = `${baseUrl ?? process.env.AF_API_BASE ?? BASE_URL}${path}`;
 		const headers = await this.buildHeaders(method !== "GET");
 
 		const timeoutMs = requestTimeoutMs();
@@ -213,13 +214,14 @@ export class AkiflowClient {
 					refreshFailure = error;
 				}
 			}
-			if (refreshed) return this.request<TData>(method, path, body, true);
+			if (refreshed)
+				return this.request<TData>(method, path, body, true, baseUrl);
 			const stored = this.managedCredentials
 				? await loadCredentials(this.configDirectory)
 				: null;
 			if (stored && `Bearer ${stored.token}` !== headers.Authorization) {
 				this.credentials = stored;
-				return this.request<TData>(method, path, body, true);
+				return this.request<TData>(method, path, body, true, baseUrl);
 			}
 			if (refreshFailure) throw refreshFailure;
 			throw new AuthError(
@@ -370,6 +372,26 @@ export class AkiflowClient {
 		}
 
 		return this.request<Label[]>("GET", `/v5/labels?${params.toString()}`);
+	}
+
+	async upsertLabels(
+		labels: Array<{ id: string } & Record<string, unknown>>,
+	): Promise<ApiResponse<Label[]>> {
+		return this.request<Label[]>("PATCH", "/v5/labels", labels);
+	}
+
+	/** Official Aki endpoint issues a short-lived GetStream user token. It is never persisted. */
+	async getAkiChatSession(): Promise<{
+		token: string;
+		channel?: { id?: string };
+	}> {
+		return this.request<never>(
+			"POST",
+			"/chat/token",
+			undefined,
+			false,
+			process.env.AF_AKI_BASE ?? "https://aki.akiflow.com/api/v1",
+		) as unknown as Promise<{ token: string; channel?: { id?: string } }>;
 	}
 
 	async getTags(

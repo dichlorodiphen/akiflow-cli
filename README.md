@@ -147,7 +147,12 @@ Conversion dry-runs by default. `--execute` creates missing events; `--delete-so
 ### Projects, Cache, Diagnostics
 
 ```bash
-af project list
+af project list --json
+af project show <project-id> --json
+af project create "Research" --color palette-blueberry --verify --json
+af project update <project-id> --title "Reading" --icon "📚" --verify
+af project delete <project-id> --dry-run
+af project delete <project-id> --yes --verify --json
 af refresh --json
 af refresh --rebuild --json
 af doctor
@@ -155,7 +160,23 @@ af doctor --json
 af completion zsh
 ```
 
-Project mutation is intentionally unsupported until Akiflow's labels mutation API is captured and tested.
+Project writes use fresh observations and versioned receipts. Ordinary projects support title, color, icon, sorting, and placement inside an existing folder (`--parent <folder-id>`); omitted fields are preserved. Use `--clear-color`, `--clear-icon`, or `--clear-parent` to clear metadata. Exact IDs take priority; duplicate names are rejected. Deletion soft-deletes only the project and preserves tasks with their existing references. Projects with live sections/children or assigned time slots must have those relationships removed first. Folders and sections are inspection-only; no archive lifecycle is claimed.
+
+### Aki assistant
+
+```bash
+af aki list --json
+af aki create --title "Planning question" --json
+af aki history <conversation-id> --json
+af aki send "Explain time blocking; do not modify anything" \
+  --conversation <conversation-id> --allow-actions --json
+af aki send "An explicit follow-up" --conversation <conversation-id> --allow-actions --no-wait --json
+af aki stop <conversation-id>
+```
+
+Aki can perform server-side account actions. Every prompt requires `--allow-actions`; there is no verified read-only chat mode. The CLI never executes instructions returned in a response. Conversation membership must include the selected login and Aki. Sessions and chat content stay in memory and are not written to the CLI cache or logs.
+
+Submission returns a generated message ID. Waiting observes fresh posted replies for up to 120 seconds (`--timeout 1..300`); `reply_received` means a reply was observed, not that every server-side action or later reply has finished. Aki does not expose a verified turn-completion marker. `--no-wait` returns after acceptance. An interrupted/uncertain write is never replayed; inspect history before manually submitting again. `stop` requests cancellation and does not undo actions already performed.
 
 ## Configuration
 

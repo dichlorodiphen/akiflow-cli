@@ -35,10 +35,16 @@ describe("project command", () => {
 		expect(description).toContain("project");
 	});
 
-	it("only exposes read-only list subcommand", () => {
+	it("exposes project inspection commands", () => {
 		// given
 		const subCommands = projectCommand.subCommands as Record<string, unknown>;
 
-		expect(Object.keys(subCommands)).toEqual(["list"]);
+		expect(Object.keys(subCommands)).toEqual([
+			"list",
+			"show",
+			"create",
+			"update",
+			"delete",
+		]);
 	});
 });

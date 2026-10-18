@@ -111,7 +111,17 @@ Conversion requires a task selector or explicit `--all`. `--to events` selects t
 ## Diagnostics and limits
 
 ```bash
-af project list
+af project list --json
+af project show <project-id> --json
+af project create "Research" --verify --json
+af project update <project-id> --title "Reading" --verify --json
+af project delete <project-id> --dry-run
+af project delete <project-id> --yes --verify --json
+af aki list --json
+af aki create --title "Question" --json
+af aki history <conversation-id> --json
+af aki send "Explicit prompt" --conversation <conversation-id> --allow-actions --json
+af aki stop <conversation-id>
 af auth status
 af doctor --strict --json
 af completion zsh
@@ -119,4 +129,4 @@ af completion zsh
 
 `auth login` imports existing browser tokens; bare `auth` prints help. `auth refresh` renews saved credentials (and can fall back to browser import if no refresh token exists). Use auth/cache-changing commands for the requested troubleshooting or freshness task; see [output and recovery](references/output-and-recovery.md).
 
-Project mutation, all-day event writes, per-instance recurring event writes, reminders, conferencing creation, and Aki chat are unsupported. All-day/recurring reads, RRULE creation, and scoped series update/delete/truncation are available. For installation of this private fork, read [installation](references/installation.md).
+Ordinary project create/update/soft-delete and Aki chat are supported. Project deletion preserves tasks; projects with live sections/children or assigned time slots are refused. Folder/section mutation and project archiving are unsupported. Aki may act on the account; prompts require `--allow-actions` and have no verified read-only mode. Session tokens and chat content are memory-only. `reply_received` means a posted reply was observed, not verified turn/action completion. Use history after an uncertain request; never automatically replay a prompt. `--no-wait` returns after submission; `aki stop` requests cancellation without undoing actions. All-day event writes, per-instance recurring event writes, reminders, and conferencing creation are unsupported. All-day/recurring reads, RRULE creation, and scoped series update/delete/truncation are available. For installation of this private fork, read [installation](references/installation.md).
