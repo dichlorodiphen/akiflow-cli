@@ -33,9 +33,15 @@ Sign in to Akiflow in a supported browser, then explicitly extract credentials:
 
 ```bash
 af auth login
+af auth verify --json
 ```
 
 Chrome, Firefox, Safari, Arc, Brave, and Edge storage discovery is supported.
 Platform-specific extraction still depends on browser storage format and OS access.
 Do not copy credentials or production caches into the repository. Run `af refresh`
 to populate local observations after authentication.
+
+For another Akiflow login, first run `af profile create <name>`, then use
+`af --profile <name> auth login` and `af --profile <name> auth verify --json`.
+Confirm the returned identity before using that profile. Use explicit `--profile`
+selection rather than changing the saved default for a single operation.

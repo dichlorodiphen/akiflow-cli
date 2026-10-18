@@ -62,7 +62,7 @@ af reconcile --calendar "Personal" --tomorrow --timezone America/Los_Angeles --j
 af reconcile --from 2026-10-19 --to 2026-10-23 --timezone America/Los_Angeles --google-cmd /path/to/helper --json --envelope
 ```
 
-Reconciliation compares fresh Akiflow events/calendars, fresh Google events, and an existing pinned local cache snapshot. It does not synthesize Akiflow recurrence presence, refresh, initialize, migrate, or repair cache and does not submit event writes. Only observed records establish server/cache presence. Its read-only Akiflow client refuses a 401 without token-refresh writes; authenticate separately if necessary.
+Reconciliation compares fresh Akiflow events/calendars, fresh Google events, and an existing pinned local cache snapshot. It does not synthesize Akiflow recurrence presence, refresh, initialize, migrate, or repair cache and does not submit event writes. Only observed records establish server/cache presence. Akiflow calendar-data requests are GET-only, but a 401 can refresh OAuth credentials and retry the read; token rotation can update the selected profile’s credential file. Read-only calendar comparison does not mean zero authentication writes.
 
 Exactly one day-selector family is allowed. Today is default; ranges require both endpoints, include the entire `--to` day, and are limited to 31 local calendar days. Timezone precedence is explicit `--timezone` > profile `timezone` > host. All-day events participate in presence comparisons. Date windows are half-open UTC bounds derived from selected local days.
 

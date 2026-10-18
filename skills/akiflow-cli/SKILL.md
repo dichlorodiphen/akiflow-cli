@@ -1,22 +1,40 @@
 ---
 name: akiflow-cli
-description: Manage Akiflow tasks, calendar events, task slots, and cache state through the private resource-first `af` CLI.
+description: Manage Akiflow tasks, calendars, projects, Aki chats, and login profiles with the private resource-first `af` CLI.
 metadata: {"openclaw":{"emoji":"📋","requires":{"bins":["af"]}}}
 ---
 
 # Akiflow CLI
 
-Use `af` for Akiflow task and calendar work. Checked against private build `0.4.0`. The installation provenance records the source revision and binary hashes. Use command `--help` for flags and heed the limits below.
+Use `af` for Akiflow task, calendar, project, Aki, and login-profile work. Checked against private build `0.4.0`. The installation provenance records the source revision and binary hashes. Use command `--help` for flags and heed the limits below.
 
 Prefer `--json --envelope` for reads. Check `schema_version`, `errors`, `warnings`, and the command-specific `result` shape; it is not always an array. For mutations, prefer `--json --no-envelope` to retain native receipt status and receipts at the top level. Read [output and recovery](references/output-and-recovery.md) for receipt parsing, uncertain writes, and cache/auth diagnosis.
 
 ## Freshness, previews, and outcomes
 
-- Task reads use local observations plus pending intents. Run `af refresh --json` when the user asks for current state; inspect its outcome before trusting subsequent reads. Calendar reads may auto-refresh and are not strictly offline. Mutation previews read local cache without authentication, sync, or writes; refresh separately if needed.
+- Task reads use local observations plus pending intents. Run `af refresh --json` when the user asks for current state; inspect its outcome before trusting subsequent reads. Calendar reads may auto-refresh and are not strictly offline. Task/event/slot previews read local cache without authentication, sync, or writes; refresh separately if needed. Project previews use authenticated fresh reads and submit no project changes.
 - All task/event/slot mutations accept `--dry-run`. Batch and conversion preview by default and require `--execute` to write. Do not combine `--execute` with `--dry-run`.
 - A mutation receipt with `status: "accepted"` means submitted, not confirmed. Add `--verify` to the original authorized write when fresh field confirmation is needed (15-second default). This confirms observed Akiflow state, not Google/provider application. Failed, unknown, pending, mismatch, timeout, or partial results are not success, even if a returned object looks correct.
 - Never repeat a write simply to verify it, including when the CLI says “re-run with --verify.” Inspect fresh records first after an uncertain result. Preserve operation IDs and any conversion resume token.
 - `pending: true` and `pending_conflict` describe local intent, not server confirmation. Pending intents do not expire by age. Refresh and inspect observed state to resolve uncertainty; do not delete cache files to make a warning disappear.
+
+## Login profiles and connected accounts
+
+A profile is a separate Akiflow login; connected Google accounts/calendars belong inside that login. Select the profile before reading or mutating. Precedence is `--profile <name>` > `AF_PROFILE` > saved default > legacy `default`.
+
+```bash
+af profile list --json
+af profile status --json
+af profile create work
+af --profile work auth login
+af --profile work auth verify --json
+af --profile work task list --json --envelope
+af profile use work
+```
+
+`profile create` creates an empty profile, never copies credentials. `profile use` changes the default for future commands; prefer explicit `--profile` for a single operation. Import only the requested login, then check `auth verify`'s server-derived `user_id` before using it. Existing bindings refuse a different identity; create another profile rather than removing the binding or copying token/cache files. Credentials, refresh locks, caches, numbered task context, timezone configuration, and mutation journals are isolated. Never carry numeric task IDs or snapshot tokens across profiles.
+
+Within a login, resolve a calendar by its Akiflow ID or an unambiguous selector; account/calendar identity must agree. Do not substitute an Akiflow calendar UUID for a Google provider calendar ID. Two connected Google accounts were exercised live; separate real Akiflow logins have not both been exercised, so do not claim that validation is complete.
 
 ## Tasks and identifiers
 
@@ -45,7 +63,7 @@ af task delete <task-uuid> --dry-run --json
 
 Complete tasks only when the user asks. Task deletion requires explicit user authorization; an existing explicit instruction counts.
 
-Dates are local calendar dates; use explicit `YYYY-MM-DD`. Creation accepts `--timezone <IANA>` with flag > profile (`~/.config/af/config.json`, or `$AF_CONFIG_DIR/config.json`) > host precedence. Task plan/snooze and event update preserve the existing record's zone ahead of profile/host unless explicitly overridden. DST gaps are rejected; ambiguous folds require `--fold first|second`.
+Dates are local calendar dates; use explicit `YYYY-MM-DD`. Timed creation accepts `--timezone <IANA>` with flag > selected profile’s `config.json` > host precedence. Task plan/snooze and event update preserve the existing record's zone ahead of profile/host unless explicitly overridden. DST gaps are rejected; ambiguous folds require `--fold first|second`.
 
 `task plan --date` without `--at` preserves an existing timed task's wall-clock time; use `--clear-time` for date-only. Snooze `m`/`h` units add elapsed time; `d`/`w` preserve wall-clock time across DST. Slot update does **not** accept `--timezone`/`--fold`; it preserves and interprets timing in the stored slot timezone. Inspect the preview's UTC instants.
 
@@ -133,4 +151,4 @@ af completion zsh
 
 `auth login` imports existing browser tokens; bare `auth` prints help. `auth refresh` renews saved credentials (and can fall back to browser import if no refresh token exists). Use auth/cache-changing commands for the requested troubleshooting or freshness task; see [output and recovery](references/output-and-recovery.md).
 
-Ordinary project create/update/soft-delete and Aki chat are supported. Project deletion preserves tasks; projects with live sections/children or assigned time slots are refused. Folder/section mutation and project archiving are unsupported. Aki may act on the account; prompts require `--allow-actions` and have no verified read-only mode. Session tokens and chat content are memory-only. `reply_received` means a posted reply was observed, not verified turn/action completion. Use history after an uncertain request; never automatically replay a prompt. `--no-wait` returns after submission; `aki stop` requests cancellation without undoing actions. Reminders and conferencing creation are unsupported. Calendar writes cover timed/all-day events and native scoped series/instance operations. For installation of this private fork, read [installation](references/installation.md).
+Ordinary project create/update/soft-delete and Aki chat are supported. `project list/show` use local observations; refresh first when freshness matters. Project mutations and previews use fresh reads; project selectors accept IDs or exact unambiguous titles, and colors use palette names such as `palette-blueberry`. Project deletion preserves tasks; projects with live sections/children or assigned time slots are refused. Folder/section mutation and project archiving are unsupported. Aki may act on the account; prompts require `--allow-actions` and have no verified read-only mode. The CLI keeps chat session tokens and chat content in memory without a local chat cache; Aki retains conversations on the service, and requested output may contain chat content. `reply_received` means a posted reply was observed, not verified turn/action completion. Use history after an uncertain request; never automatically replay a prompt. `--no-wait` returns after submission; `aki stop` requests cancellation without undoing actions. Reminders and conferencing creation are unsupported. Calendar writes cover timed/all-day events and native scoped series/instance operations. For installation of this private fork, read [installation](references/installation.md).

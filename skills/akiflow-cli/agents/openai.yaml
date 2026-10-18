@@ -1,0 +1,4 @@
+interface:
+  display_name: "Akiflow CLI"
+  short_description: "Tasks, calendars, projects, profiles, and Aki"
+  default_prompt: "Use $akiflow-cli to review today's Akiflow tasks and schedule."
