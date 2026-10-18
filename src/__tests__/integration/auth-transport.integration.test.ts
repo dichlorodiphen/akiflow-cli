@@ -145,9 +145,8 @@ describe("K auth and transport", () => {
 	});
 	test("cross-process rotation reloads disk after failed refresh and retries once", async () => {
 		const rotated = await rotateServer();
-		const client = new AkiflowClient({
-			credentials: { token: "stale", clientId: "test", refreshToken: "bad" },
-		});
+		await saveCredentials("stale", "test", Date.now() + 60000, "bad");
+		const client = new AkiflowClient();
 		const gate = server.gate({ path: "/oauth/refreshToken" });
 		const request = client.get("/v5/tasks");
 		await gate.entered;
@@ -167,17 +166,20 @@ describe("K auth and transport", () => {
 	test("disk rotation also recovers from a timed-out refresh", async () => {
 		const rotated = await rotateServer();
 		process.env.AF_REQUEST_TIMEOUT_MS = "10";
-		const client = new AkiflowClient({
-			credentials: { token: "stale", clientId: "test", refreshToken: "bad" },
-		});
-		server.schedule({ path: "/oauth/refreshToken", type: "latency", ms: 50 });
+		await saveCredentials("stale", "test", Date.now() + 60000, "bad");
+		const client = new AkiflowClient();
+		const gate = server.gate({ path: "/oauth/refreshToken" });
+		const request = client.get("/v5/tasks");
+		await gate.entered;
 		await saveCredentials(
 			rotated.accessToken,
 			"test",
 			rotated.expiresAtMs,
 			rotated.refreshToken,
 		);
-		expect((await client.get("/v5/tasks")).success).toBe(true);
+		await Bun.sleep(15);
+		gate.release();
+		expect((await request).success).toBe(true);
 		expect(refreshCount()).toBe(1);
 		expect(
 			server.requests.filter((r) => r.url.pathname === "/v5/tasks"),
@@ -256,9 +258,10 @@ describe("K auth and transport", () => {
 		expect(report.cache.error).toContain("cache unreadable");
 	});
 
-	test("doctor default retains legacy JSON keys without severity additions", async () => {
+	test("doctor default retains legacy JSON keys and adds selected profile without severity additions", async () => {
 		const result = await session.run(["doctor", "--json"]);
 		expect(Object.keys(JSON.parse(result.stdout))).toEqual([
+			"profile",
 			"credentials",
 			"browsers",
 			"cache",

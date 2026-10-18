@@ -234,3 +234,26 @@ test("real OAuth numeric string sub is recognized without treating arbitrary sub
 	for (const sub of ["", "278040junk", "1.2", "-1", "9007199254740993", 278040])
 		expect(tokenUserId(token({ sub }))).toBeNull();
 });
+
+test("explicit credential clients never adopt an ambient profile after rejection", async () => {
+	await saveCredentials("ambient-token", "ambient-client");
+	const observed: string[] = [];
+	const fetch = spyOn(globalThis, "fetch").mockImplementation((async (
+		_input,
+		init,
+	) => {
+		observed.push(new Headers(init?.headers).get("Authorization") ?? "");
+		return new Response("{}", { status: 401 });
+	}) as typeof globalThis.fetch);
+	try {
+		const client = new AkiflowClient({
+			credentials: { token: "explicit-other", clientId: "other-client" },
+		});
+		await expect(client.get("/v5/tasks")).rejects.toThrow(
+			"Authentication failed",
+		);
+		expect(observed).toEqual(["Bearer explicit-other"]);
+	} finally {
+		fetch.mockRestore();
+	}
+});
