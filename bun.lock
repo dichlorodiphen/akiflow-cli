@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "akiflow-cli-atlas",
+      "name": "akiflow-cli",
       "dependencies": {
         "chrono-node": "^2.9.0",
         "citty": "^0.2.0",

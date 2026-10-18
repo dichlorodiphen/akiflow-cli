@@ -4,6 +4,8 @@ import { UsageError } from "./exit-codes";
 
 // citty has no variadic positional definition. These resource verbs explicitly
 // accept a list in their documented positional contract.
+const REPEATABLE_FLAGS = new Set(["task-id", "add-task-id", "remove-task-id"]);
+
 const VARIADIC_PATHS = new Set([
 	"task complete",
 	"event attendees add",
@@ -15,6 +17,12 @@ const VARIADIC_PATHS = new Set([
 export interface ValidatedArgs {
 	command: string;
 	values: Record<string, string | boolean>;
+	repeatedValues: Record<string, string[]>;
+	positionals: string[];
+	definition: CommandDef;
+	parent?: CommandDef;
+	help: boolean;
+	version: boolean;
 }
 
 /** Validate raw argv before citty can run setup, auth, or cache operations. */
@@ -23,6 +31,9 @@ export async function validateArgv(
 	argv: string[],
 ): Promise<ValidatedArgs> {
 	let command = root;
+	let parent: CommandDef | undefined;
+	let version = false;
+	const repeatedValues: Record<string, string[]> = {};
 	const path: string[] = [];
 	const values: Record<string, string | boolean> = {};
 	const positionals: string[] = [];
@@ -49,8 +60,13 @@ export async function validateArgv(
 			terminated = true;
 			continue;
 		}
-		if (!terminated && ["--help", "-h", "--version", "-v"].includes(token)) {
-			help = true;
+		if (
+			!terminated &&
+			["--help", "-h", "--version", "-v"].includes(token) &&
+			!options.has(token.replace(/^-+/, ""))
+		) {
+			if (token === "--help" || token === "-h") help = true;
+			else version = true;
 			continue;
 		}
 		if (!terminated && token.startsWith("-") && token !== "-") {
@@ -69,8 +85,9 @@ export async function validateArgv(
 				if (option.definition.type === "boolean") {
 					if (inline !== undefined && !["true", "false"].includes(inline))
 						throw new UsageError(`Invalid boolean value ${token}`);
-					values[option.name] =
-						inline === undefined ? !negative : inline === "true";
+					values[option.name] = negative
+						? inline === "false"
+						: inline !== "false";
 				} else {
 					const bundled =
 						keys.length > 1 ? keys.slice(k + 1).join("") : undefined;
@@ -86,6 +103,11 @@ export async function validateArgv(
 					)
 						throw new UsageError(`Invalid value ${value} for ${token}`);
 					values[option.name] = value;
+					if (REPEATABLE_FLAGS.has(option.name)) {
+						const previous = repeatedValues[option.name] ?? [];
+						previous.push(value);
+						repeatedValues[option.name] = previous;
+					}
 					break;
 				}
 			}
@@ -95,6 +117,7 @@ export async function validateArgv(
 		if (!terminated && Object.keys(children).length && !positionals.length) {
 			const child = children[token];
 			if (!child) throw new UsageError(`Unknown command ${token}`);
+			parent = command;
 			command = await resolveDefinition(child, {});
 			path.push(token);
 			continue;
@@ -110,7 +133,7 @@ export async function validateArgv(
 			throw new UsageError(`Unexpected positional ${token}`);
 	}
 	const args = await resolveDefinition(command.args, {});
-	if (!help) {
+	if (!help && !version) {
 		let index = 0;
 		for (const [name, arg] of Object.entries(args)) {
 			if (arg.type === "positional") {
@@ -127,5 +150,14 @@ export async function validateArgv(
 	}
 	if (values.execute && values["dry-run"])
 		throw new UsageError("Contradictory flags --execute and --dry-run");
-	return { command: path.join(" ") || "af", values };
+	return {
+		command: path.join(" ") || "af",
+		values,
+		repeatedValues,
+		positionals,
+		definition: command,
+		parent,
+		help,
+		version,
+	};
 }

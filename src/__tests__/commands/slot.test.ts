@@ -10,6 +10,7 @@ import {
 	deleteSlotCommand,
 	listSlotCommand,
 	resolveCachedSlot,
+	resolveSlotTiming,
 	showSlotCommand,
 	updateSlotCommand,
 } from "../../commands/slot";
@@ -619,5 +620,30 @@ describe("slot command", () => {
 
 		consoleErrorSpy.mockRestore();
 		processExitSpy.mockRestore();
+	});
+});
+
+describe("slot timing timezone retention", () => {
+	it("keeps the slot zone across a DST date move regardless of host zone", () => {
+		const result = resolveSlotTiming({
+			slot: slot({
+				start_time: "2026-03-07T17:00:00Z",
+				end_time: "2026-03-07T18:00:00Z",
+			}),
+			dateInput: "2026-03-08",
+		});
+		expect(result.startTime).toBe("2026-03-08T16:00:00.000Z");
+		expect(result.timezone).toBe("America/Los_Angeles");
+		expect(result.date).toBe("2026-03-08");
+	});
+	it("keeps midnight-near membership dates in the slot zone", () => {
+		const result = resolveSlotTiming({
+			slot: slot({
+				start_time: "2026-06-20T01:00:00Z",
+				end_time: "2026-06-20T02:00:00Z",
+			}),
+		});
+		expect(result.date).toBe("2026-06-19");
+		expect(result.timezone).toBe("America/Los_Angeles");
 	});
 });

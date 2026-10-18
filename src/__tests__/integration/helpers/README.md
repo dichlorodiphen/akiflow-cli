@@ -36,7 +36,7 @@ There are three separate layers of truth:
    Those extra fields and synthetic task/slot origin IDs deliberately make
    canonical divergence observable; they do not assert provider behavior.
 2. **Operation receipts** (`operations`, `operationHistory`) have independent
-   server IDs, retain `event_id`, and transition `pending → succeeded | failed`.
+   server IDs by default (an adversarial remapping mode), retain `event_id`, and transition `pending → succeeded | failed`.
    The API type calls applied operations **`succeeded`**, not `applied`.
    `processed_at`, `failed_at`, `result`, and `status` are always returned.
    Successful results contain canonical event rows; failures contain an error
@@ -45,6 +45,9 @@ There are three separate layers of truth:
    deliberately exercising clients that confuse client IDs with receipt IDs.
    Reposting an identical client operation ID reuses its receipt and does not
    apply twice. Reposting a new ID is a new operation, including after a 500.
+   Use `echoOperationIds:true` for the documented client-generated operation-ID
+   contract when testing known acceptance and concurrent edits. The remapping
+   mode deliberately yields unknown receipts to a client requiring exact IDs.
 3. **GET-visible state** and per-resource change journals are published separately
    from canonical writes. `visibilityRequests: N` hides a change for the next N
    further requests, making it visible on request N+1. Requests to any endpoint
@@ -146,40 +149,19 @@ bypass behavioral application and sync. They run after auth/fault controls. Pref
 `seed`, lifecycle controls and faults; an echo override recreates the defect this
 server was built to catch. Unknown routes return 404.
 
-## Scenario catalog and confirmed incident probes
+## Active incident regressions
 
-Each scenario can be configured in one or two lines:
+All eight historical incident invariants in `../fake-server.behavioral.test.ts`
+are active: rejected envelopes, failed receipts, mixed batches, independent
+concurrent edits, overlapping rebuilds, timed snooze, date-only planning, and
+cancelled updates. The matrix uses `echoOperationIds:true`; mixed foreign deletes
+also provide `--confirm`. Receipt JSON assertions use `report.result`.
 
-| Scenario | Builder | Correct CLI behavior / observed current defect | Fix owner |
-| --- | --- | --- | --- |
-| Fabricated acceptance | `server.scenarios.fabricatedAcceptance(true)` | `success:false` must not print creation success; current CLI prints “created successfully”. | A |
-| Failed receipt | `server.scenarios.fabricatedAcceptance()` | Accepted envelope containing a failed receipt must surface failure; current CLI prints creation success. | A |
-| Mixed batch | `server.scenarios.mixedBatch(op => op.event_id === badId)` | Report applied and failed items independently; current CLI reports two failed despite one applied. | A |
-| Stale base chain | `server.scenarios.staleBaseChain(); const gate = server.gate({ path: "/v5/event_operations" });` | Competing independent edits preserve both fields; current last full snapshot erases the other description. | A/E |
-| Lock race | `const gate = server.scenarios.lockRace();` | Second rebuild cannot enter while the first is held; current second rebuild completes before the first resumes. | C |
-| Timed snooze | `server.scenarios.snooze(taskUuid)` | `1h` moves the actual instant and preserves its zone; current PATCH omits both timing fields. | F |
-| Date-only planning | `server.scenarios.snooze(taskUuid)` | Move to the new date preserving wall time; current datetime stays on the old date. | F |
-| Cancelled update intent | `server.seed("events", [{ ...event, status: "cancelled" }])` | Reject cancelled targets without dispatching delete; current update sends a delete operation. | E |
-
-`strictBase:true` optionally rejects patch operations whose supplied base fields
-do not equal the canonical row (`result.error:stale_base`). This is a simplified
-optimistic conflict model, not a reproduction of undocumented Google conflict
-resolution. Default mode applies competing patches in application order, making
-lost full-snapshot fields observable. Failure predicates receive the original
-submitted operation, before its receipt ID changes.
-
-All eight incident tests in `../fake-server.behavioral.test.ts` were executed as
-ordinary tests against the current CLI on 2026-09-30 and failed at the expected
-assertions above. They are now `test.skip`, with an owner and expected behavior
-comment. The model's own tests and working CLI auth/uncertain-write controls stay
-active. No CLI bug is fixed by this workstream.
-
-To land a fixing workstream, change its corresponding `test.skip` to `test`, run
-it with the owning change, then revert that fix and verify the assertion fails
-again. A receipt schema migration may require updating JSON field paths; preserve
-the server-truth assertions and the expected applied/failed counts. The competing
-update probe allows a repaired command queue to wait before releasing its first
-request. Cache races test actual overlapping rebuilds against one isolated cache.
+`strictBase:true` optionally rejects changed base fields as `stale_base`; this
+is a controlled conflict model, not a claim about Google conflict resolution.
+Patches merge only specified fields, so full stale snapshot overwrites remain
+observable. Default remapping, delayed visibility, after-apply transport errors,
+and receipt lifecycle tests remain separate adversarial controls.
 
 ## Running tests and transport limits
 
@@ -203,9 +185,9 @@ session intentionally models competing command handlers.
 
 The original `spawnCli()` helper still launches the CLI in a separate Bun process
 and exercises real HTTP through `start()/stop()`. Those tests require loopback
-socket permission. The development sandbox rejected listeners with `EPERM`, so
-the complete socket integration suite could not be validated here; that is an
-environmental failure, not a behavioral CLI probe. In-process drop tests verify
+socket permission. Some historical sandboxes rejected listeners with `EPERM`; on this Mac, the
+full socket integration suite is runnable. Record the actual environment and
+results for each validation run. In-process drop tests verify
 connection-failure signaling; actual abrupt TCP close is exercised only through
 the socket adapter. Neither adapter models Google delivery, JWT signature checks,
 provider notification delivery, quota policy, or every provider conflict rule.

@@ -3,10 +3,11 @@ import { Database } from "bun:sqlite";
 import {
 	copyFileSync,
 	existsSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	statSync,
-	unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -202,29 +203,25 @@ export async function decryptChromeValue(
 	// Chrome on macOS uses AES-128-CBC with a 16-byte IV of spaces (0x20)
 	const iv = new Uint8Array(16).fill(0x20);
 
-	const cryptoKey = await crypto.subtle.importKey(
-		"raw",
-		key.buffer as ArrayBuffer,
-		{ name: "AES-CBC" },
-		false,
-		["decrypt"],
-	);
-
-	const decrypted = await crypto.subtle.decrypt(
-		{ name: "AES-CBC", iv },
-		cryptoKey,
-		ciphertext,
-	);
-
-	// Remove PKCS7 padding
-	const decryptedBytes = new Uint8Array(decrypted);
-	const paddingLength = decryptedBytes[decryptedBytes.length - 1] ?? 0;
-	const unpaddedBytes = decryptedBytes.slice(
-		0,
-		decryptedBytes.length - paddingLength,
-	);
-
-	return new TextDecoder().decode(unpaddedBytes);
+	try {
+		const cryptoKey = await crypto.subtle.importKey(
+			"raw",
+			Uint8Array.from(key),
+			{ name: "AES-CBC" },
+			false,
+			["decrypt"],
+		);
+		const decrypted = await crypto.subtle.decrypt(
+			{ name: "AES-CBC", iv },
+			cryptoKey,
+			ciphertext,
+		);
+		// WebCrypto already verifies and removes PKCS#7 padding.
+		return new TextDecoder().decode(decrypted);
+	} catch {
+		// A corrupt cookie must not prevent trying other browser sessions.
+		return null;
+	}
 }
 
 /**
@@ -251,25 +248,26 @@ export async function extractFromChrome(
 	const key = await deriveKey(password);
 
 	// Copy database to temp location (browser may have lock on it)
-	const tempPath = join(tmpdir(), `${browserPath.id}_cookies_${Date.now()}.db`);
-
-	copyFileSync(browserPath.cookiePath, tempPath);
+	const tempDirectory = mkdtempSync(join(tmpdir(), "af-browser-cookies-"));
+	const tempPath = join(tempDirectory, "Cookies");
 
 	let database: Database | null = null;
 
 	try {
+		copyFileSync(browserPath.cookiePath, tempPath);
 		database = new Database(tempPath, { readonly: true });
 
 		// Query for Akiflow cookies
 		const query = database.query(`
 	    SELECT name, value, encrypted_value, host_key
 	    FROM cookies
-	    WHERE host_key LIKE $domain
+	    WHERE (host_key = $domain OR host_key LIKE $subdomain)
 	      AND name LIKE $pattern
 	  `);
 
 		const rows = query.all({
-			$domain: `%${AKIFLOW_DOMAIN}%`,
+			$domain: AKIFLOW_DOMAIN,
+			$subdomain: `%.${AKIFLOW_DOMAIN}`,
 			$pattern: `${COOKIE_NAME_PATTERN}%`,
 		}) as Array<{
 			name: string;
@@ -319,7 +317,7 @@ export async function extractFromChrome(
 			});
 		}
 		try {
-			unlinkSync(tempPath);
+			rmSync(tempDirectory, { recursive: true, force: true });
 		} catch (error) {
 			log.warn(
 				"temp_cookie_cleanup_failed",
@@ -359,6 +357,7 @@ export async function extractFromSafari(
 
 	const file = Bun.file(browserPath.cookiePath);
 	const buffer = await file.arrayBuffer();
+	if (buffer.byteLength < 8) return tokens;
 	const data = new DataView(buffer);
 	const bytes = new Uint8Array(buffer);
 
@@ -375,6 +374,7 @@ export async function extractFromSafari(
 
 	// Number of pages (big-endian)
 	const numPages = data.getUint32(4, false);
+	if (numPages > (buffer.byteLength - 8) / 4) return tokens;
 
 	// Read page sizes
 	const pageSizes: number[] = [];
@@ -389,6 +389,7 @@ export async function extractFromSafari(
 		const pageSize = pageSizes[pageIndex];
 		if (!pageSize) continue;
 
+		if (pageSize < 8 || offset + pageSize > buffer.byteLength) return tokens;
 		const pageStart = offset;
 		const pageData = new DataView(buffer, pageStart, pageSize);
 
@@ -401,6 +402,10 @@ export async function extractFromSafari(
 
 		// Number of cookies (little-endian)
 		const numCookies = pageData.getUint32(4, true);
+		if (numCookies > (pageSize - 8) / 4) {
+			offset += pageSize;
+			continue;
+		}
 
 		// Read cookie offsets
 		const cookieOffsets: number[] = [];
@@ -414,7 +419,9 @@ export async function extractFromSafari(
 		for (const cookieOffset of cookieOffsets) {
 			const cookie = parseSafariCookie(pageData, cookieOffset, pageSize);
 			if (
-				cookie?.domain.includes(AKIFLOW_DOMAIN) &&
+				cookie &&
+				(cookie.domain.replace(/^\./, "") === AKIFLOW_DOMAIN ||
+					cookie.domain.endsWith(`.${AKIFLOW_DOMAIN}`)) &&
 				cookie.name.startsWith(COOKIE_NAME_PATTERN)
 			) {
 				const jwt = isJwtToken(cookie.value)
@@ -472,7 +479,7 @@ function parseSafariCookie(
 	// 48-55: creation date (8 bytes)
 
 	const cookieSize = pageData.getUint32(cookieOffset, true);
-	if (cookieOffset + cookieSize > pageSize) {
+	if (cookieSize < 48 || cookieOffset + cookieSize > pageSize) {
 		return null;
 	}
 
@@ -481,16 +488,17 @@ function parseSafariCookie(
 	const pathOffset = pageData.getUint32(cookieOffset + 24, true);
 	const valueOffset = pageData.getUint32(cookieOffset + 28, true);
 
+	const stringOffsets = [domainOffset, nameOffset, pathOffset, valueOffset];
+	if (stringOffsets.some((value) => value < 48 || value >= cookieSize))
+		return null;
 	const readString = (stringOffset: number): string => {
 		const bytes = new Uint8Array(
 			pageData.buffer,
 			pageData.byteOffset + cookieOffset + stringOffset,
+			cookieSize - stringOffset,
 		);
-		let end = 0;
-		while (end < bytes.length && bytes[end] !== 0) {
-			end++;
-		}
-		return new TextDecoder().decode(bytes.slice(0, end));
+		const end = bytes.indexOf(0);
+		return new TextDecoder().decode(end < 0 ? bytes : bytes.subarray(0, end));
 	};
 
 	return {
@@ -658,13 +666,11 @@ export async function extractFromIndexedDB(
 		}
 
 		const fullPath = join(akiflowDBPath, file);
-		const stat = statSync(fullPath);
-
-		if (!stat.isFile()) {
-			continue;
-		}
-
 		try {
+			// LevelDB rotates files while the browser is running. A vanished file
+			// must not abort scanning the remaining session records.
+			if (!statSync(fullPath).isFile()) continue;
+
 			const content = readFileSync(fullPath);
 			const str = content.toString("utf-8");
 

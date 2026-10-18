@@ -291,3 +291,11 @@ describe("behavioral fake model (no sockets)", () => {
 		).toBe(401);
 	});
 });
+
+test("documented operation-ID echo mode correlates receipts without weakening remapped-ID adversary", async () => {
+	const server = new FakeAkiflowServer({ echoOperationIds: true });
+	const input = operation();
+	const result = await read(server, "/v5/event_operations", [input]);
+	expect(result.data[0]?.id).toBe(input.id);
+	expect(result.data[0]?.status).toBe("succeeded");
+});

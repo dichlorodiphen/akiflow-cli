@@ -322,7 +322,7 @@ describe("convert tasks command", () => {
 		// Pre-populate the journal: task-1 was already converted to event-1.
 		// This replaces the old title/time heuristic with provider-identity matching.
 		const { recordConversion } = await import("../../lib/conversion-journal");
-		recordConversion({
+		await recordConversion({
 			source_task_id: "task-1",
 			target_event_id: "event-1",
 			converted_at: "2026-06-20T00:00:00.000Z",
@@ -379,10 +379,93 @@ describe("convert tasks command", () => {
 		consoleLogSpy.mockRestore();
 	});
 
+	it("never creates a replacement when a previous target cannot be observed", async () => {
+		const { recordConversion, findTargetForSource } = await import(
+			"../../lib/conversion-journal"
+		);
+		await recordConversion({
+			source_task_id: "task-1",
+			target_event_id: "event-prior",
+			converted_at: "2026-06-20T00:00:00Z",
+			provenance: { title: "", start_time: "", calendar_id: "" },
+		});
+		readResourceSpy.mockImplementation((_client: unknown, resource: string) =>
+			Promise.resolve(
+				resource === "tasks"
+					? [task()]
+					: resource === "calendars"
+						? [calendar()]
+						: [],
+			),
+		);
+		fetchSpy.mockResolvedValue(
+			new Response(JSON.stringify({ success: true, data: [], message: null }), {
+				status: 200,
+			}),
+		);
+		await expect(
+			convertTasksCommand.run!({
+				args: { to: "events", all: true, execute: true, json: true, _: [] },
+				rawArgs: [],
+			} as any),
+		).rejects.toThrow("refusing to create a replacement");
+		expect(
+			fetchSpy.mock.calls.every(
+				(call: Parameters<typeof fetch>) =>
+					!call[1]?.method || call[1]?.method === "GET",
+			),
+		).toBe(true);
+		expect(findTargetForSource("task-1")).toBe("event-prior");
+	});
+
+	it("keeps a reserved target when submission outcome is unknown", async () => {
+		const { findTargetForSource } = await import(
+			"../../lib/conversion-journal"
+		);
+		fetchSpy.mockImplementation(async (_input: unknown, init?: RequestInit) => {
+			const operation = JSON.parse(init?.body as string)[0];
+			expect(findTargetForSource("task-1")).toBe(operation.event_id);
+			return new Response(JSON.stringify({ success: true, data: [] }));
+		});
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await convertTasksCommand.run!({
+				args: { to: "events", all: true, execute: true, json: true, _: [] },
+				rawArgs: [],
+			} as any);
+			expect(findTargetForSource("task-1")).toBeTruthy();
+			expect(JSON.parse(String(log.mock.calls[0]?.[0])).status).toBe("unknown");
+		} finally {
+			log.mockRestore();
+			process.exitCode = 0;
+		}
+	});
+
+	it("resume preview never persists recovered conversion mappings", async () => {
+		const { encodeResumeToken, findTargetForSource } = await import(
+			"../../lib/conversion-journal"
+		);
+		const token = encodeResumeToken(
+			[{ source_task_id: "completed", target_event_id: "existing" }],
+			["task-1"],
+		);
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await convertTasksCommand.run!({
+				args: { to: "events", resume: token, json: true, _: [] },
+				rawArgs: [],
+			} as any);
+			expect(findTargetForSource("completed")).toBeNull();
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it("retains canonical read-only verification and refuses source deletion", async () => {
 		// Pre-populate journal so the cached event is treated as the conversion target.
 		const { recordConversion } = await import("../../lib/conversion-journal");
-		recordConversion({
+		await recordConversion({
 			source_task_id: "task-1",
 			target_event_id: "event-1",
 			converted_at: "2026-06-20T00:00:00.000Z",

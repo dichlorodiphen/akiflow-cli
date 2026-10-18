@@ -1,6 +1,6 @@
 /// <reference types="bun" />
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { statSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -152,6 +152,33 @@ describe("Credentials Storage", () => {
 
 			// then
 			expect(result).toBeNull();
+		});
+
+		it("rejects valid JSON with invalid credential shapes", async () => {
+			mkdirSync(TEST_CONFIG_DIR, { recursive: true });
+			const valid = {
+				token: "fixture",
+				clientId: "client",
+				expiryTimestamp: 42,
+			};
+			for (const value of [
+				null,
+				[],
+				{},
+				{ ...valid, token: 3 },
+				{ ...valid, clientId: "" },
+				{ ...valid, expiryTimestamp: "42" },
+				{ ...valid, expiryTimestamp: 1e100 },
+				{ ...valid, refreshToken: [] },
+			]) {
+				writeFileSync(getCredentialsPath(), JSON.stringify(value));
+				expect(await loadCredentials()).toBeNull();
+			}
+		});
+
+		it("preserves an explicit expired epoch timestamp", async () => {
+			await saveCredentials("fixture", "client", 0);
+			expect((await loadCredentials())?.expiryTimestamp).toBe(0);
 		});
 
 		it("loads saved credentials", async () => {

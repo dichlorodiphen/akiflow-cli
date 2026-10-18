@@ -132,3 +132,29 @@ test("reconcile exposes only read-only day, calendar, timezone and helper flags"
 		"unexpected",
 	);
 });
+
+test("inline negated booleans and repeated membership flags preserve their meaning", async () => {
+	expect(
+		(await validateArgv(tree, ["thing", "title", "--no-quiet=false"])).values
+			.quiet,
+	).toBe(true);
+	expect(
+		(await validateArgv(tree, ["thing", "title", "--no-quiet=true"])).values
+			.quiet,
+	).toBe(false);
+	const args = await validateArgv(main, [
+		"slot",
+		"create",
+		"Focus",
+		"--date",
+		"2026-10-18",
+		"--at",
+		"09:00",
+		"--duration",
+		"1h",
+		"--task-id",
+		"first",
+		"--task-id=second",
+	]);
+	expect(args.repeatedValues["task-id"]).toEqual(["first", "second"]);
+});

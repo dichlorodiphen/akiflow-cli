@@ -3,6 +3,7 @@ import { snapshotResources } from "./cache";
 import { resolveCalendarFromList } from "./calendar";
 import {
 	endOfDay,
+	formatLocalDate,
 	type NamedRange,
 	resolveRange,
 	startOfDay,
@@ -19,8 +20,21 @@ import {
 	type OccurrenceQuery,
 	queryOccurrencesWithRaw,
 } from "./occurrence";
+import { overlayPendingTasks } from "./tasks";
+import {
+	calendarDayStartUtc,
+	formatInTimezone,
+	utcToDateString,
+	zonedTimeToUtc,
+} from "./timezone";
+import { resolveEffectiveTimezone } from "./timezone-profile";
 
 export const occurrenceReadArgs = {
+	timezone: {
+		type: "string",
+		description:
+			"IANA timezone for date selectors (profile, then local by default)",
+	},
 	today: { type: "boolean", description: "Today (default)" },
 	tomorrow: { type: "boolean" },
 	date: { type: "string", description: "Single local day" },
@@ -39,7 +53,22 @@ export const occurrenceReadArgs = {
 	json: { type: "boolean", description: "JSON output" },
 } as const;
 
-export function occurrenceRange(args: Record<string, unknown>) {
+export function occurrenceRange(
+	args: Record<string, unknown>,
+	now = new Date(),
+) {
+	const timezone =
+		typeof args.timezone === "string"
+			? args.timezone
+			: Intl.DateTimeFormat().resolvedOptions().timeZone;
+	const wall = formatInTimezone(now.toISOString(), timezone);
+	const reference = new Date(
+		wall.year,
+		wall.month - 1,
+		wall.day,
+		wall.hours,
+		wall.minutes,
+	);
 	validateDateSelectors(args);
 	const names: NamedRange[] = [
 		"today",
@@ -52,21 +81,67 @@ export function occurrenceRange(args: Record<string, unknown>) {
 	];
 	const named = names.find((name) => args[name]);
 	const range = named
-		? resolveRange(named)
+		? resolveRange(named, reference)
 		: args.date
-			? strictDaySelector(String(args.date))
+			? strictDaySelector(
+					/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(
+						String(args.date).trim(),
+					)
+						? utcToDateString(String(args.date), timezone)
+						: String(args.date),
+					reference,
+				)
 			: args.from || args.to
 				? {
 						from: args.from
-							? strictBoundarySelector(String(args.from), "start")
+							? strictBoundarySelector(String(args.from), "start", reference)
 							: startOfDay(new Date(0)),
 						to: args.to
-							? strictBoundarySelector(String(args.to), "end")
+							? strictBoundarySelector(String(args.to), "end", reference)
 							: endOfDay(new Date(9999, 11, 31)),
 					}
-				: resolveRange("today");
+				: resolveRange("today", reference);
 	// Date selectors have inclusive ends; occurrence intervals use exclusive ends.
-	return { from: range.from, to: new Date(range.to.getTime() + 1) };
+	const boundary = (date: Date, value: unknown, end: boolean): Date => {
+		if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value.trim())) {
+			if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(value.trim()))
+				return new Date(date.getTime() + Number(end));
+			return new Date(
+				Date.parse(
+					zonedTimeToUtc(
+						formatLocalDate(date),
+						date.getHours(),
+						date.getMinutes(),
+						timezone,
+					),
+				) +
+					date.getSeconds() * 1000 +
+					date.getMilliseconds() +
+					Number(end),
+			);
+		}
+		const civil = new Date(date);
+		if (
+			end &&
+			civil.getFullYear() === 9999 &&
+			civil.getMonth() === 11 &&
+			civil.getDate() === 31
+		) {
+			// The open upper sentinel is one instant beyond the four-digit input
+			// vocabulary; never feed year 10000 back into the date validator.
+			return new Date(
+				Date.parse(zonedTimeToUtc("9999-12-31", 23, 59, timezone, "second")) +
+					60000,
+			);
+		}
+		if (end) civil.setDate(civil.getDate() + 1);
+		return new Date(calendarDayStartUtc(formatLocalDate(civil), timezone));
+	};
+	const from = boundary(range.from, args.from, false);
+	const to = boundary(range.to, args.to, true);
+	if (from >= to)
+		throw new UsageError("Date range end must be after its start");
+	return { from, to };
 }
 export function minimumMinutes(args: Record<string, unknown>): number {
 	if (args["min-duration"] === undefined) return 0;
@@ -84,20 +159,27 @@ export async function readOccurrences(
 	client: CacheClient,
 	args: Record<string, unknown>,
 ) {
-	const range = occurrenceRange(args);
+	const timezone = await resolveEffectiveTimezone(
+		args.timezone as string | undefined,
+	);
+	const range = occurrenceRange({ ...args, timezone });
 	const minMinutes = minimumMinutes(args);
 	const resources: Resource[] = ["calendars"];
 	if (args.events !== false) resources.push("events");
 	if (args.slots !== false) resources.push("time_slots");
-	// Tasks use D's unified repository (with pending overlay), not snapshotResources
-	if (args.tasks !== false) {
-		// Don't include tasks in snapshotResources, we'll read via D's readTasks
-	}
+	if (args.tasks !== false) resources.push("tasks");
 	if (args.json && !args.summary && !args.free) resources.push("accounts");
 	const snapshot = await snapshotResources(client, resources);
-	// Read tasks via D's unified repository (includes pending overlay)
-	const { readTasks } = await import("./tasks");
-	const tasks = args.tasks === false ? [] : await readTasks(client);
+	const observedTaskIds = new Set(
+		(snapshot.data.tasks ?? []).map((task) => task.id),
+	);
+	const tasks =
+		args.tasks === false
+			? []
+			: overlayPendingTasks(snapshot.data.tasks, {
+					includeTrashed: true,
+					deletedTasks: snapshot.deletedTasks,
+				});
 	const calendars = snapshot.data.calendars;
 	const calendarId =
 		args.calendar === undefined
@@ -106,8 +188,11 @@ export async function readOccurrences(
 					includeDeleted: true,
 					includeHidden: true,
 				}).id;
+	const recurrenceWarnings: string[] = [];
 	const query: OccurrenceQuery = {
+		recurrenceWarnings,
 		...range,
+		timezone,
 		calendarId,
 		activeCalendarIds: calendars
 			.filter((c) => c.deleted_at == null)
@@ -137,7 +222,10 @@ export async function readOccurrences(
 			return {
 				...pair,
 				occurrence: attachProvenance([pair.occurrence], {
-					observedAt: snapshot.observedAt[resource],
+					observedAt:
+						resource === "tasks" && !observedTaskIds.has(pair.raw.id)
+							? null
+							: snapshot.observedAt[resource],
 					generation: snapshot.generation,
 				})[0]!,
 			};
@@ -151,6 +239,8 @@ export async function readOccurrences(
 		);
 	return {
 		snapshot,
+		recurrenceWarnings: [...new Set(recurrenceWarnings)],
+		timezone,
 		input,
 		query,
 		pairs,

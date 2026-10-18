@@ -39,6 +39,8 @@ export type Fault = Match &
 		| { type: "gate"; wait: Promise<void>; entered: () => void }
 	);
 export interface FakeServerOptions {
+	/** Echo the documented client operation ID; default remapping is adversarial. */
+	echoOperationIds?: boolean;
 	pageSize?: number;
 	duplicatePageBoundaries?: boolean;
 	visibilityRequests?: number;
@@ -584,7 +586,7 @@ export class FakeAkiflowServer {
 		const timestamp = this.timestamp();
 		const op: EventOperation = {
 			...copy(input),
-			id: crypto.randomUUID(),
+			id: this.options.echoOperationIds ? input.id : crypto.randomUUID(),
 			user_id: 42,
 			status: "pending",
 			result: null,

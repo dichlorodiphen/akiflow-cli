@@ -84,6 +84,38 @@ function matches(task: Task, fields: Partial<Task>): boolean {
 	);
 }
 
+function newerDeletion(
+	deletedAt: string | undefined,
+	createdAt: string,
+): boolean {
+	return (
+		deletedAt !== undefined && Date.parse(deletedAt) > Date.parse(createdAt)
+	);
+}
+function pendingConflict(
+	base: Task | undefined,
+	group: TaskIntent[],
+): string | undefined {
+	return base &&
+		group.some(
+			(intent) =>
+				intent.baseObservedVersion &&
+				base.global_updated_at > intent.baseObservedVersion &&
+				!matches(base, intent.fields),
+		)
+		? `Observed task ${base.id} conflicts with unacknowledged intent; pending fields retained`
+		: undefined;
+}
+function terminalObservation(task: Task | undefined): boolean {
+	return (
+		!!task &&
+		(!!task.deleted_at ||
+			task.status === 9 ||
+			!!task.trashed_at ||
+			task.status === 10)
+	);
+}
+
 /** Append under C's ownership lock. API acknowledgements are intents, never observations. */
 export async function recordTaskIntent(
 	kind: IntentKind,
@@ -141,6 +173,15 @@ export async function readTasks(
 			const latest = group.at(-1);
 			if (!latest) continue;
 			const deletedAt = deleted[id];
+			// A fresh explicit tombstone supersedes every older intent, not only
+			// a locally requested delete. Otherwise fallback snapshots resurrect
+			// externally deleted tasks indefinitely. Old tombstones cannot erase
+			// a later create for the same client-generated identity.
+			if (!base && newerDeletion(deletedAt, latest.createdAt)) {
+				rows.delete(id);
+				continue;
+			}
+
 			// Journal order is lock acquisition order. Later fields supersede
 			// earlier fields, so acknowledgement of the final state clears the chain.
 			const fields = Object.assign(
@@ -165,6 +206,7 @@ export async function readTasks(
 				rows.delete(id);
 				continue;
 			}
+			if (terminalObservation(base)) continue;
 			const fallback = group.find((i) => i.snapshot)?.snapshot;
 			const row = {
 				...emptyTask(id),
@@ -174,17 +216,10 @@ export async function readTasks(
 				pending: true as const,
 			};
 			// A newer conflicting observation cannot silently undo completion.
-			const conflict =
-				base &&
-				group.some(
-					(i) =>
-						i.baseObservedVersion &&
-						base.global_updated_at > i.baseObservedVersion &&
-						!matches(base, i.fields),
-				);
+			const conflict = pendingConflict(base, group);
 			if (conflict) {
-				row.pending_conflict = `Observed task ${id} conflicts with unacknowledged intent; pending fields retained`;
-				console.error(`Warning: ${row.pending_conflict}`);
+				row.pending_conflict = conflict;
+				console.error(`Warning: ${conflict}`);
 			}
 			rows.set(id, row);
 		}
@@ -197,6 +232,64 @@ export async function readTasks(
 				(options.includeTrashed || (!t.trashed_at && t.status !== 10)),
 		);
 	});
+}
+
+/** Apply local intents to a caller-pinned observation without repinning or writing.
+ * Reconciliation stays with readTasks; timeline readers retain their own generation.
+ */
+export function overlayPendingTasks(
+	observed: Task[],
+	options: {
+		includeTrashed?: boolean;
+		deletedTasks?: Record<string, string>;
+	} = {},
+): Task[] {
+	const rows = new Map(observed.map((task) => [task.id, { ...task }]));
+	const groups = new Map<string, TaskIntent[]>();
+	for (const intent of loadIntents()) {
+		assertMutableTaskId(intent.taskId);
+		const group = groups.get(intent.taskId) ?? [];
+		group.push(intent);
+		groups.set(intent.taskId, group);
+	}
+	for (const [id, group] of groups) {
+		const latest = group.at(-1)!;
+		if (
+			!rows.has(id) &&
+			newerDeletion(options.deletedTasks?.[id], latest.createdAt)
+		) {
+			rows.delete(id);
+			continue;
+		}
+		if (group.some((intent) => intent.kind === "delete")) {
+			rows.delete(id);
+			continue;
+		}
+		const base = rows.get(id);
+		if (terminalObservation(base)) continue;
+		const fields = Object.assign(
+			{},
+			...group.map((intent) => intent.fields),
+		) as Partial<Task>;
+		if (base && matches(base, fields)) continue;
+		const fallback = group.find((intent) => intent.snapshot)?.snapshot;
+		rows.set(id, {
+			...emptyTask(id),
+			...fallback,
+			...base,
+			...fields,
+			pending: true,
+			...(pendingConflict(base, group)
+				? { pending_conflict: pendingConflict(base, group) }
+				: {}),
+		});
+	}
+	return [...rows.values()].filter(
+		(task) =>
+			!task.deleted_at &&
+			task.status !== 9 &&
+			(options.includeTrashed || (!task.trashed_at && task.status !== 10)),
+	);
 }
 
 function emptyTask(id: string): Task {

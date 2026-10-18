@@ -935,7 +935,7 @@ async function runBatchEventDelete(
 	// Drop journal entries for deleted events so the guard stays accurate.
 	for (const receipt of response.receipts) {
 		if (receipt.status === "accepted") {
-			clearCreatedEvent(receipt.event_id);
+			await clearCreatedEvent(receipt.event_id);
 		}
 	}
 	const verifications = new Map<string, VerificationResult<Event>>();

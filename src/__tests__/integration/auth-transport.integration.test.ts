@@ -58,6 +58,7 @@ describe("K auth and transport", () => {
 		expect(scan).not.toHaveBeenCalled();
 		const result = await session.run(["auth", "login"]);
 		expect(result.stdout).toContain("Scanning browsers");
+		expect(result.exitCode).toBe(1);
 		expect(scan).toHaveBeenCalledTimes(1);
 	});
 	test("refresh success rotates and saves tokens without scanning", async () => {
@@ -244,6 +245,17 @@ describe("K auth and transport", () => {
 			recovery: "check network / AF_API_BASE",
 		});
 	});
+	test("doctor reports corrupt cache as critical without losing the diagnostic report", async () => {
+		await Bun.write(`${session.env.env.AF_CACHE_DIR}/tokens.json`, "{broken");
+		const result = await session.run(["doctor", "--strict", "--json"]);
+		expect(result.exitCode).toBe(1);
+		const report = JSON.parse(result.stdout);
+		expect(
+			report.checks.find((check: { check: string }) => check.check === "cache"),
+		).toMatchObject({ severity: "critical", recovery: "af refresh --rebuild" });
+		expect(report.cache.error).toContain("cache unreadable");
+	});
+
 	test("doctor default retains legacy JSON keys without severity additions", async () => {
 		const result = await session.run(["doctor", "--json"]);
 		expect(Object.keys(JSON.parse(result.stdout))).toEqual([

@@ -108,15 +108,14 @@ describe("batch command helpers", () => {
 			} as never,
 			operations,
 		);
-		// Empty result data means the envelope cannot confirm per-operation
-		// outcomes: nothing is invented as accepted or failed, but the
-		// matched failure detail is preserved on the receipt.
+		// A matching explicit failure proves rejection even without result rows;
+		// unmentioned operation outcomes remain unknown.
 		expect(result.receipts).toMatchObject([
 			{
 				operation_id: operations[0]!.id,
 				event_id: "first",
-				status: "unknown",
-				error: ["Partial failure", "Denied"],
+				status: "failed",
+				error: "Denied",
 			},
 			{
 				operation_id: operations[1]!.id,

@@ -293,11 +293,16 @@ export class AkiflowClient {
 		const limit = DEFAULT_LIMIT;
 
 		let cursor: string | undefined;
-		let safety = 0;
+		const seenCursors = new Set<string>();
 
 		while (true) {
 			const response = await this.getTasks({ limit, syncToken: cursor });
-			const pageTasks = response.data ?? [];
+			if (!response.success || !Array.isArray(response.data)) {
+				throw new Error(
+					`Task pagination failed: ${response.message ?? "invalid response"}`,
+				);
+			}
+			const pageTasks = response.data;
 
 			allTasks.push(...pageTasks);
 
@@ -305,11 +310,18 @@ export class AkiflowClient {
 			if (!hasNext) break;
 
 			// Avoid infinite loops: token must advance for next page.
-			if (!response.sync_token || response.sync_token === cursor) break;
-
+			if (!response.sync_token || seenCursors.has(response.sync_token)) {
+				throw new Error(
+					"Task pagination failed: missing or non-advancing sync_token",
+				);
+			}
+			seenCursors.add(response.sync_token);
 			cursor = response.sync_token;
-			safety += 1;
-			if (safety > 1000) break;
+			if (seenCursors.size > 1000) {
+				throw new Error(
+					"Task pagination exceeded 1000 pages; results are incomplete",
+				);
+			}
 		}
 
 		return allTasks;

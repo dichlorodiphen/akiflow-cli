@@ -46,6 +46,67 @@ function dateOnly(value: string): Date {
 	return new Date(Date.UTC(year, month - 1, day));
 }
 
+function utcFromWall(wall: Date, zone: string): Date {
+	return new Date(
+		Date.parse(
+			zonedTimeToUtc(
+				wall.toISOString().slice(0, 10),
+				wall.getUTCHours(),
+				wall.getUTCMinutes(),
+				zone,
+				"first",
+			),
+		) +
+			wall.getUTCSeconds() * 1000 +
+			wall.getUTCMilliseconds(),
+	);
+}
+
+/** rrule exposes RDATE/EXDATE as floating fields even when a TZID is supplied. */
+function recurrenceDates(master: Event, property: "EXDATE" | "RDATE"): Date[] {
+	const dates: Date[] = [];
+	const zone = master.start_datetime_tz || "UTC";
+	for (const line of master.recurrence ?? []) {
+		const colon = line.indexOf(":");
+		const header = line.slice(0, colon);
+		if (header.split(";")[0]?.toUpperCase() !== property) continue;
+		const sourceZone = header
+			.split(";")
+			.find((part) => part.toUpperCase().startsWith("TZID="))
+			?.slice(5);
+		const parsed = rrulestr(line, { forceset: true }) as RRuleSet;
+		const values = line.slice(colon + 1).split(",");
+		const parsedDates =
+			property === "EXDATE" ? parsed.exdates() : parsed.rdates();
+		for (let i = 0; i < parsedDates.length; i++) {
+			const date = parsedDates[i]!;
+			dates.push(
+				master.start_date != null || values[i]?.endsWith("Z")
+					? date
+					: utcFromWall(date, sourceZone || zone),
+			);
+		}
+	}
+	return dates;
+}
+
+/** Master anchors explicitly removed by the recurrence are not occurrences. */
+export function excludedRecurringSlots(events: Event[]): Set<string> {
+	const result = new Set<string>();
+	for (const master of events) {
+		if (!isRecurringEventMaster(master)) continue;
+		try {
+			for (const date of recurrenceDates(master, "EXDATE"))
+				result.add(
+					`${master.id}|${master.start_date != null ? date.toISOString().slice(0, 10) : date.toISOString()}`,
+				);
+		} catch {
+			/* Malformed recurrence is reported by expansion. */
+		}
+	}
+	return result;
+}
+
 function slotKey(event: Event): string | null {
 	const time = instant(event.original_start_time ?? event.start_time);
 	const slot =
@@ -83,6 +144,7 @@ export function expandRecurringEvents(
 	from?: Date,
 	to?: Date,
 	evidence: Event[] = events,
+	warnings: string[] = [],
 ): Event[] {
 	const covered = coveredRecurringSlots(evidence);
 	const visible = new Set(
@@ -123,9 +185,16 @@ export function expandRecurringEvents(
 			}) as RRuleSet;
 			// EXRULE is obsolete and can make exclusion work unbounded; leave such
 			// series to materialized records rather than partially interpreting it.
-			if (parsed.exrules().length) continue;
+			if (parsed.exrules().length) {
+				warnings.push(
+					`Recurring series ${master.id}: unsupported EXRULE; virtual occurrences were omitted.`,
+				);
+				continue;
+			}
 			const exclusions = new Set(
-				parsed.exdates().map((d) => (allDay ? d : wallTime(d, zone)).getTime()),
+				recurrenceDates(master, "EXDATE").map((d) =>
+					(allDay ? d : wallTime(d, zone)).getTime(),
+				),
 			);
 			const slots = new Map<number, Date>();
 			const overlapDuration = allDay ? duration + DAY : duration;
@@ -135,26 +204,16 @@ export function expandRecurringEvents(
 			);
 			let visited = 0;
 			const collect = (wall: Date): boolean => {
-				if (++visited > MAX_VISITED || slots.size >= MAX_OCCURRENCES)
+				if (++visited > MAX_VISITED || slots.size >= MAX_OCCURRENCES) {
+					warnings.push(
+						`Recurring series ${master.id}: expansion safety limit reached; calendar coverage may be incomplete.`,
+					);
 					return false;
+				}
 				if (wall < earliestWall || exclusions.has(wall.getTime())) return true;
 				let slot: Date;
 				try {
-					slot = allDay
-						? wall
-						: new Date(
-								new Date(
-									zonedTimeToUtc(
-										wall.toISOString().slice(0, 10),
-										wall.getUTCHours(),
-										wall.getUTCMinutes(),
-										zone,
-										"first",
-									),
-								).getTime() +
-									wall.getUTCSeconds() * 1000 +
-									wall.getUTCMilliseconds(),
-							);
+					slot = allDay ? wall : utcFromWall(wall, zone);
 				} catch (error) {
 					if (error instanceof DSTGapError) return true;
 					throw error;
@@ -187,7 +246,7 @@ export function expandRecurringEvents(
 					true,
 				).all((wall) => collect(wall));
 			}
-			for (const date of parsed.rdates()) {
+			for (const date of recurrenceDates(master, "RDATE")) {
 				if (visited >= MAX_VISITED || slots.size >= MAX_OCCURRENCES) break;
 				collect(allDay ? date : wallTime(date, zone));
 			}
@@ -223,6 +282,9 @@ export function expandRecurringEvents(
 				});
 			}
 		} catch {
+			warnings.push(
+				`Recurring series ${master.id}: malformed recurrence or timezone; virtual occurrences were omitted.`,
+			);
 			// Malformed cached recurrence/timezone data must not break the read.
 		}
 	}

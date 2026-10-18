@@ -167,6 +167,43 @@ describe("AkiflowClient", () => {
 	});
 
 	describe("getAllTasks", () => {
+		it("rejects unsuccessful pages instead of returning an incomplete list", async () => {
+			fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: false,
+						message: "page rejected",
+						data: [],
+					}),
+					{ status: 200 },
+				),
+			);
+			await expect(createClient().getAllTasks()).rejects.toThrow(
+				"page rejected",
+			);
+		});
+		it("rejects missing and cyclic cursors instead of returning partial results", async () => {
+			for (const tokens of [[undefined], ["a", "b", "a"]]) {
+				fetchSpy = spyOn(globalThis, "fetch");
+				for (const token of tokens)
+					fetchSpy.mockResolvedValueOnce(
+						new Response(
+							JSON.stringify({
+								...mockTaskResponse,
+								has_next_page: true,
+								sync_token: token,
+							}),
+							{ status: 200 },
+						),
+					);
+				await expect(createClient().getAllTasks()).rejects.toThrow(
+					"non-advancing sync_token",
+				);
+				expect(fetchSpy).toHaveBeenCalledTimes(tokens.length);
+				fetchSpy.mockRestore();
+			}
+		});
+
 		it("paginates using sync_token cursor", async () => {
 			// given
 			const page1 = {

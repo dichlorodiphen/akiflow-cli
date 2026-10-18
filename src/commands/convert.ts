@@ -16,11 +16,11 @@ import {
 	resolveEventTargetCalendar,
 } from "../lib/calendar";
 import {
-	clearConversionEntry,
 	decodeResumeToken,
 	encodeResumeToken,
 	findTargetForSource,
 	recordConversion,
+	reserveConversion,
 } from "../lib/conversion-journal";
 import {
 	endOfDay,
@@ -194,6 +194,7 @@ function buildCandidates(
 	existingEvents: Event[],
 	calendar: Awaited<ReturnType<typeof resolveEventTargetCalendar>>,
 	defaultDurationSeconds: number | null,
+	resumedTargets: ReadonlyMap<string, string> = new Map(),
 ): ConversionCandidate[] {
 	// Provider-identity matching via the conversion journal. The journal maps
 	// source task IDs to target Akiflow event IDs (provider identity). This
@@ -220,7 +221,8 @@ function buildCandidates(
 			timezone: task.datetime_tz,
 			calendar,
 		});
-		const journalTargetId = findTargetForSource(task.id);
+		const journalTargetId =
+			findTargetForSource(task.id) ?? resumedTargets.get(task.id) ?? null;
 		const match = journalTargetId
 			? (eventsById.get(journalTargetId) ?? null)
 			: null;
@@ -300,7 +302,7 @@ function printJsonSummary(
 					matched_event_id: candidate.match?.id ?? null,
 					before: candidate.match ?? null,
 					after: candidate.match ?? candidate.payload,
-					notification_policy: "all",
+					notification_policy: "none",
 					source_before: deleteSource ? candidate.task : undefined,
 					source_after: deleteSource
 						? { ...candidate.task, deleted_at: "on execution" }
@@ -409,6 +411,7 @@ export const convertTasksCommand = defineCommand({
 		// Resume token: decode and ensure completed mappings are in the journal.
 		// The token's pending list acts as the selector, so no --all is needed.
 		let resumePending: Set<string> | null = null;
+		const resumedTargets = new Map<string, string>();
 		const resumeToken = rawArgs.resume as string | undefined;
 		if (resumeToken) {
 			const decoded = decodeResumeToken(resumeToken);
@@ -420,8 +423,12 @@ export const convertTasksCommand = defineCommand({
 			}
 			// Ensure completed mappings are recorded (journal may have been lost).
 			for (const entry of decoded.completed) {
-				if (!findTargetForSource(entry.source_task_id)) {
-					recordConversion({
+				resumedTargets.set(entry.source_task_id, entry.target_event_id);
+				if (
+					rawArgs.execute === true &&
+					!findTargetForSource(entry.source_task_id)
+				) {
+					await recordConversion({
 						source_task_id: entry.source_task_id,
 						target_event_id: entry.target_event_id,
 						converted_at: decoded.issued_at,
@@ -521,6 +528,7 @@ export const convertTasksCommand = defineCommand({
 			events,
 			calendar,
 			defaultDurationSeconds,
+			resumedTargets,
 		);
 		const execute = rawArgs.execute === true;
 		const deleteSource = rawArgs["delete-source"] === true;
@@ -532,7 +540,7 @@ export const convertTasksCommand = defineCommand({
 				console.log(formatPreview(candidates, deleteSource, false));
 				printDryRun(
 					candidates.flatMap((candidate) => [
-						previewItem(null, candidate.payload, "all"),
+						previewItem(null, candidate.payload, "none"),
 						...(deleteSource
 							? [
 									previewItem(candidate.task, {
@@ -559,16 +567,36 @@ export const convertTasksCommand = defineCommand({
 					{},
 					{ ...verificationOptions(), singlePoll: true },
 				);
-				if (journalVerification.observed) {
+				if (
+					journalVerification.status === "verified" &&
+					journalVerification.observed
+				) {
 					candidate.match = journalVerification.observed;
 				} else {
-					clearConversionEntry(candidate.task.id);
-					candidate.journalTargetId = null;
+					// Absence, a tombstone, or a failed observation cannot authorize
+					// replaying an earlier write with a new ID. Keep its mapping.
+					throw new Error(
+						`Cannot confirm previously converted target ${candidate.journalTargetId} (${journalVerification.status}); refusing to create a replacement. Refresh and inspect the existing target before retrying.`,
+					);
 				}
 			}
 		}
 
 		const toCreate = candidates.filter((candidate) => !candidate.match);
+		// Persist target identities before submitting, covering transport uncertainty
+		// and crashes between the server write and its acknowledgement.
+		for (const candidate of toCreate) {
+			await reserveConversion({
+				source_task_id: candidate.task.id,
+				target_event_id: candidate.payload.id,
+				converted_at: new Date().toISOString(),
+				provenance: {
+					title: candidate.task.title ?? "",
+					start_time: candidate.startTime,
+					calendar_id: candidate.payload.calendar_id ?? "",
+				},
+			});
+		}
 		const receipts: MutationReceipt[] = toCreate.length
 			? (
 					await client.submitEventOperations(
@@ -588,7 +616,7 @@ export const convertTasksCommand = defineCommand({
 			// Receipt event_id is the created event's ID; fall back to payload ID.
 			const targetId = receipt?.event_id ?? candidate.payload.id;
 			if (receipt && receipt.status === "accepted" && targetId) {
-				recordConversion({
+				await recordConversion({
 					source_task_id: candidate.task.id,
 					target_event_id: targetId,
 					converted_at: new Date().toISOString(),
@@ -603,7 +631,7 @@ export const convertTasksCommand = defineCommand({
 				// verification and deletion gating.)
 				// Provenance for the delete guard: convert-created events are
 				// CLI-created, so later deletes must not demand --confirm.
-				recordCreatedEvent({
+				await recordCreatedEvent({
 					event_id: targetId,
 					created_at: new Date().toISOString(),
 					provenance: {
@@ -679,8 +707,8 @@ export const convertTasksCommand = defineCommand({
 					...deletion.failedIds.map((id) => `Source deletion failed: ${id}`),
 					...deletion.unknownIds.map((id) => `Source deletion unknown: ${id}`),
 				);
-			else {
-				for (const payload of deletePayloads)
+			for (const payload of deletePayloads) {
+				if (deletion.succeededIds.includes(payload.id))
 					await recordTaskIntent("delete", payload);
 			}
 		}

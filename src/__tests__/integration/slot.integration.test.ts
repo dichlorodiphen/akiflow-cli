@@ -80,8 +80,9 @@ describe("af slot (BDD)", () => {
 		});
 		expect(refresh.exitCode).toBe(0);
 
-		const expectedStart = "2026-05-22T16:30:00.000Z";
-		const expectedEnd = "2026-05-22T17:15:00.000Z";
+		// The fixture slot is in New York; the LA host must not reinterpret its wall time.
+		const expectedStart = "2026-05-22T13:30:00.000Z";
+		const expectedEnd = "2026-05-22T14:15:00.000Z";
 		const result = await spawnCli(
 			[
 				"slot",
@@ -109,6 +110,7 @@ describe("af slot (BDD)", () => {
 		expect(output.slot).toMatchObject({
 			id: "slot-focus-1",
 			title: "Updated fixture slot",
+			start_datetime_tz: "America/New_York",
 			start_time: expectedStart,
 			end_time: expectedEnd,
 		});
@@ -125,6 +127,7 @@ describe("af slot (BDD)", () => {
 		expect(slotPayload[0]).toMatchObject({
 			id: "slot-focus-1",
 			title: "Updated fixture slot",
+			start_datetime_tz: "America/New_York",
 			start_time: expectedStart,
 			end_time: expectedEnd,
 			global_updated_at: expect.any(String),
@@ -190,4 +193,42 @@ describe("af slot (BDD)", () => {
 			},
 		]);
 	});
+});
+
+test("slot create applies every repeated task-id through the real CLI boundary", async () => {
+	const ids = server
+		.snapshot("tasks")
+		.slice(0, 2)
+		.map((task) => task.id);
+	expect(ids).toHaveLength(2);
+	const refresh = await spawnCli(["refresh", "--rebuild", "--json"], {
+		env: env.env,
+	});
+	expect(refresh.exitCode).toBe(0);
+	const result = await spawnCli(
+		[
+			"slot",
+			"create",
+			"Repeated members",
+			"--date",
+			"2026-05-22",
+			"--at",
+			"10:00",
+			"--duration",
+			"1h",
+			"--task-id",
+			String(ids[0]),
+			"--task-id",
+			String(ids[1]),
+			"--json",
+		],
+		{ env: env.env },
+	);
+	expect(result.exitCode, result.stderr).toBe(0);
+	const request = server.requests.find(
+		(r) => r.method === "PATCH" && r.url.pathname === "/v5/tasks",
+	);
+	expect(request).toBeDefined();
+	const payload = JSON.parse(request?.body ?? "[]") as Array<{ id: string }>;
+	expect(payload.map((task) => task.id).sort()).toEqual(ids.sort());
 });

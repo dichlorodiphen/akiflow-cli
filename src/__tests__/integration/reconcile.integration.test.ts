@@ -5,6 +5,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -114,7 +115,7 @@ function safety(
 
 function googleReadSafety() {
 	for (const call of calls()) {
-		expect(call.executable).toBe(google.executable);
+		expect(realpathSync(call.executable)).toBe(realpathSync(google.executable));
 		expect(call.argv.slice(0, 2)).toEqual(["calendar", "events"]);
 		expect(["list", "get"]).toContain(call.argv[2] ?? "");
 		expect(call.argv).toHaveLength(5);

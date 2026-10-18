@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { completionCommand } from "../../commands/completion";
 
 describe("completion command", () => {
@@ -14,7 +16,7 @@ describe("completion command", () => {
 
 	it("generates bash completion script", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -30,7 +32,7 @@ describe("completion command", () => {
 
 	it("generates zsh completion script", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "zsh" } } as never;
 
 		// when
@@ -46,7 +48,7 @@ describe("completion command", () => {
 
 	it("generates fish completion script", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "fish" } } as never;
 
 		// when
@@ -62,7 +64,7 @@ describe("completion command", () => {
 
 	it("includes all commands in bash completion", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -82,7 +84,7 @@ describe("completion command", () => {
 
 	it("includes task subcommands in zsh", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "zsh" } } as never;
 
 		// when
@@ -101,7 +103,7 @@ describe("completion command", () => {
 
 	it("includes project subcommands in fish", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "fish" } } as never;
 
 		// when
@@ -111,12 +113,12 @@ describe("completion command", () => {
 		const output = consoleLogSpy.mock.calls
 			.map((c: unknown[]) => c[0])
 			.join("\n");
-		expect(output).toContain("__fish_seen_subcommand_from project");
+		expect(output).toContain("__af_path_flags project list");
 	});
 
 	it("includes task create flags in bash", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -132,7 +134,7 @@ describe("completion command", () => {
 
 	it("includes task list flags in bash", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -148,7 +150,7 @@ describe("completion command", () => {
 
 	it("includes event and slot delete commands in bash", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -165,7 +167,7 @@ describe("completion command", () => {
 
 	it("includes slot lifecycle flags in bash", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -204,7 +206,7 @@ describe("completion command", () => {
 
 	it("handles case-insensitive shell names", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "BASH" } } as never;
 
 		// when
@@ -219,7 +221,7 @@ describe("completion command", () => {
 
 	it("bash includes completion registration", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "bash" } } as never;
 
 		// when
@@ -234,7 +236,7 @@ describe("completion command", () => {
 
 	it("zsh includes completion registration", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "zsh" } } as never;
 
 		// when
@@ -250,7 +252,7 @@ describe("completion command", () => {
 
 	it("fish includes completion registration", async () => {
 		// given
-		consoleLogSpy = spyOn(console, "log");
+		consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		const context = { args: { shell: "fish" } } as never;
 
 		// when
@@ -290,3 +292,117 @@ it.each([
 		log.mockRestore();
 	}
 });
+
+it.skipIf(!existsSync("/bin/zsh"))(
+	"zsh completes nested attendee flags in the executing shell",
+	async () => {
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await completionCommand.run?.({ args: { shell: "zsh" } } as never);
+			const script = String(log.mock.calls.at(-1)?.[0]).replace(/_af\n$/, "");
+			const result = spawnSync(
+				"/bin/zsh",
+				[
+					"-f",
+					"-c",
+					`${script}
+_describe() { printf '%s\\n' "\${suggestions[@]}"; }
+words=(af event attendees add '')
+CURRENT=5
+_af
+`,
+				],
+				{ encoding: "utf8" },
+			);
+			expect(result.status).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout.split("\n")).toContain("--send-updates");
+			expect(result.stdout).not.toContain("--duration");
+		} finally {
+			log.mockRestore();
+		}
+	},
+);
+
+it("fish scopes duplicate verb names to the full resource path", async () => {
+	const log = spyOn(console, "log").mockImplementation(() => {});
+	try {
+		await completionCommand.run?.({ args: { shell: "fish" } } as never);
+		const script = String(log.mock.calls.at(-1)?.[0]);
+		expect(script).toContain("-n '__af_path_flags event create' -l rrule");
+		expect(script).not.toContain("-n '__af_path_flags task create' -l rrule");
+	} finally {
+		log.mockRestore();
+	}
+});
+
+for (const shell of ["bash", "zsh"] as const) {
+	it.skipIf(!existsSync(`/bin/${shell}`))(
+		`${shell} resolves completion after global envelope booleans`,
+		async () => {
+			const log = spyOn(console, "log").mockImplementation(() => {});
+			let script: string;
+			try {
+				await completionCommand.run?.({ args: { shell } } as never);
+				script = String(log.mock.calls.at(-1)?.[0]);
+			} finally {
+				log.mockRestore();
+			}
+			if (shell === "zsh") script = script.replace(/_af\n$/, "");
+			const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+			for (const specimen of [
+				{ words: ["af", "--envelope", ""], wanted: "task" },
+				{
+					words: ["af", "--no-envelope=false", "event", "attendees", "add", ""],
+					wanted: "--send-updates",
+				},
+				{
+					words: ["af", "event", "--envelope=true", "attendees", "add", ""],
+					wanted: "--send-updates",
+				},
+				{
+					words: [
+						"af",
+						"--envelope=false",
+						"task",
+						"create",
+						"Title --envelope",
+						"--tag=--envelope",
+						"",
+					],
+					wanted: "--date",
+				},
+				{
+					words: ["af", "--envelope", "task", "create", "--", "--envelope", ""],
+					wanted: undefined,
+				},
+			]) {
+				const words = specimen.words.map(quote).join(" ");
+				const run =
+					shell === "bash"
+						? `
+COMP_WORDS=(${words})
+COMP_CWORD=${specimen.words.length - 1}
+_af_completion
+printf '%s\\n' "\${COMPREPLY[@]}"
+`
+						: `
+_describe() { printf '%s\\n' "\${suggestions[@]}"; }
+words=(${words})
+CURRENT=${specimen.words.length}
+_af
+`;
+				const result = spawnSync(
+					`/bin/${shell}`,
+					["-f", "-c", `${script}\n${run}`],
+					{ encoding: "utf8" },
+				);
+				expect(result.status).toBe(0);
+				expect(result.stderr).toBe("");
+				if (specimen.wanted)
+					expect(result.stdout.split("\n")).toContain(specimen.wanted);
+				else expect(result.stdout.trim()).toBe("");
+			}
+		},
+	);
+}

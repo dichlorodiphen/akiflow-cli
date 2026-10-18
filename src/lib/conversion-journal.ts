@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { atomicWrite } from "./cache/atomic";
+import { withLock } from "./cache/lock";
 import { cacheFile } from "./platform-config";
 
 /**
@@ -53,12 +54,26 @@ export function loadConversionJournal(): ConversionJournal {
 	try {
 		const raw = readFileSync(path, "utf-8");
 		const parsed = JSON.parse(raw) as ConversionJournal;
-		if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-			return emptyJournal();
+		if (
+			parsed.version !== 1 ||
+			!Array.isArray(parsed.entries) ||
+			!parsed.entries.every(
+				(entry) =>
+					entry &&
+					typeof entry.source_task_id === "string" &&
+					entry.source_task_id.length > 0 &&
+					typeof entry.target_event_id === "string" &&
+					entry.target_event_id.length > 0,
+			)
+		) {
+			throw new Error("Unsupported or invalid journal schema");
 		}
 		return parsed;
-	} catch {
-		return emptyJournal();
+	} catch (cause) {
+		throw new Error(
+			"Cannot read conversion journal; refusing to discard previous conversions",
+			{ cause },
+		);
 	}
 }
 
@@ -71,17 +86,39 @@ function saveConversionJournal(journal: ConversionJournal): void {
  * Record a source→target mapping. Idempotent: if the source already has an
  * entry, it is replaced (not duplicated).
  */
-export function recordConversion(entry: ConversionEntry): void {
-	const journal = loadConversionJournal();
-	const idx = journal.entries.findIndex(
-		(e) => e.source_task_id === entry.source_task_id,
-	);
-	if (idx >= 0) {
-		journal.entries[idx] = entry;
-	} else {
-		journal.entries.push(entry);
-	}
-	saveConversionJournal(journal);
+export async function recordConversion(entry: ConversionEntry): Promise<void> {
+	await withLock(`${journalPath()}.lock`, async () => {
+		const journal = loadConversionJournal();
+		const idx = journal.entries.findIndex(
+			(e) => e.source_task_id === entry.source_task_id,
+		);
+		if (idx >= 0) {
+			journal.entries[idx] = entry;
+		} else {
+			journal.entries.push(entry);
+		}
+		saveConversionJournal(journal);
+	});
+}
+
+/** Reserve the client-generated target ID before any network write.
+ * An interrupted submission must never be retried with a fresh target ID.
+ */
+export async function reserveConversion(entry: ConversionEntry): Promise<void> {
+	await withLock(`${journalPath()}.lock`, async () => {
+		const journal = loadConversionJournal();
+		const previous = journal.entries.find(
+			(item) => item.source_task_id === entry.source_task_id,
+		);
+		if (previous && previous.target_event_id !== entry.target_event_id)
+			throw new Error(
+				`Conversion already reserved for ${entry.source_task_id}; inspect target ${previous.target_event_id} before retrying`,
+			);
+		if (!previous) {
+			journal.entries.push(entry);
+			saveConversionJournal(journal);
+		}
+	});
 }
 
 /** Find the target event ID for a source task, or null if not converted. */
@@ -92,14 +129,18 @@ export function findTargetForSource(sourceTaskId: string): string | null {
 }
 
 /** Remove a journal entry (e.g., when the target event was deleted). */
-export function clearConversionEntry(sourceTaskId: string): void {
-	const journal = loadConversionJournal();
-	const filtered = journal.entries.filter(
-		(e) => e.source_task_id !== sourceTaskId,
-	);
-	if (filtered.length !== journal.entries.length) {
-		saveConversionJournal({ version: 1, entries: filtered });
-	}
+export async function clearConversionEntry(
+	sourceTaskId: string,
+): Promise<void> {
+	await withLock(`${journalPath()}.lock`, async () => {
+		const journal = loadConversionJournal();
+		const filtered = journal.entries.filter(
+			(e) => e.source_task_id !== sourceTaskId,
+		);
+		if (filtered.length !== journal.entries.length) {
+			saveConversionJournal({ version: 1, entries: filtered });
+		}
+	});
 }
 
 /**
@@ -137,7 +178,21 @@ export function decodeResumeToken(token: string): ResumeTokenPayload | null {
 		const json = Buffer.from(token, "base64url").toString("utf-8");
 		const parsed = JSON.parse(json) as ResumeTokenPayload;
 		if (parsed.version !== 1) return null;
-		if (!Array.isArray(parsed.completed) || !Array.isArray(parsed.pending)) {
+		if (
+			!Array.isArray(parsed.completed) ||
+			!Array.isArray(parsed.pending) ||
+			!parsed.completed.every(
+				(entry) =>
+					entry &&
+					typeof entry.source_task_id === "string" &&
+					entry.source_task_id.length > 0 &&
+					typeof entry.target_event_id === "string" &&
+					entry.target_event_id.length > 0,
+			) ||
+			!parsed.pending.every((id) => typeof id === "string" && id.length > 0) ||
+			typeof parsed.issued_at !== "string" ||
+			!Number.isFinite(Date.parse(parsed.issued_at))
+		) {
 			return null;
 		}
 		return parsed;

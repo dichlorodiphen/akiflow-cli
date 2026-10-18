@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { atomicWrite } from "./cache/atomic";
+import { withLock } from "./cache/lock";
 import { cacheFile } from "./platform-config";
 
 /**
@@ -54,17 +55,32 @@ function emptyJournal(): CreatedEventJournal {
 }
 
 /** Load the journal; returns an empty journal if none exists or it is corrupt. */
-export function loadCreatedEventJournal(): CreatedEventJournal {
+export function loadCreatedEventJournal(strict = false): CreatedEventJournal {
 	const path = journalPath();
 	if (!existsSync(path)) return emptyJournal();
 	try {
 		const raw = readFileSync(path, "utf-8");
 		const parsed = JSON.parse(raw) as CreatedEventJournal;
-		if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+		if (
+			parsed.version !== 1 ||
+			!Array.isArray(parsed.entries) ||
+			!parsed.entries.every(
+				(entry) =>
+					entry &&
+					typeof entry.event_id === "string" &&
+					entry.event_id.length > 0,
+			)
+		) {
+			if (strict) throw new Error("Unsupported or invalid journal schema");
 			return emptyJournal();
 		}
 		return parsed;
-	} catch {
+	} catch (cause) {
+		if (strict)
+			throw new Error(
+				"Cannot read created-event journal; refusing to overwrite provenance",
+				{ cause },
+			);
 		return emptyJournal();
 	}
 }
@@ -78,15 +94,19 @@ function saveCreatedEventJournal(journal: CreatedEventJournal): void {
  * Record a CLI-created event. Idempotent: an existing entry for the ID is
  * replaced (not duplicated).
  */
-export function recordCreatedEvent(entry: CreatedEventEntry): void {
-	const journal = loadCreatedEventJournal();
-	const idx = journal.entries.findIndex((e) => e.event_id === entry.event_id);
-	if (idx >= 0) {
-		journal.entries[idx] = entry;
-	} else {
-		journal.entries.push(entry);
-	}
-	saveCreatedEventJournal(journal);
+export async function recordCreatedEvent(
+	entry: CreatedEventEntry,
+): Promise<void> {
+	await withLock(`${journalPath()}.lock`, async () => {
+		const journal = loadCreatedEventJournal(true);
+		const idx = journal.entries.findIndex((e) => e.event_id === entry.event_id);
+		if (idx >= 0) {
+			journal.entries[idx] = entry;
+		} else {
+			journal.entries.push(entry);
+		}
+		saveCreatedEventJournal(journal);
+	});
 }
 
 /** True when the journal records this event ID as created by this CLI. */
@@ -95,12 +115,14 @@ export function wasCreatedByCli(eventId: string): boolean {
 }
 
 /** Remove a journal entry (e.g., after the event was deleted). */
-export function clearCreatedEvent(eventId: string): void {
-	const journal = loadCreatedEventJournal();
-	const filtered = journal.entries.filter((e) => e.event_id !== eventId);
-	if (filtered.length !== journal.entries.length) {
-		saveCreatedEventJournal({ version: 1, entries: filtered });
-	}
+export async function clearCreatedEvent(eventId: string): Promise<void> {
+	await withLock(`${journalPath()}.lock`, async () => {
+		const journal = loadCreatedEventJournal(true);
+		const filtered = journal.entries.filter((e) => e.event_id !== eventId);
+		if (filtered.length !== journal.entries.length) {
+			saveCreatedEventJournal({ version: 1, entries: filtered });
+		}
+	});
 }
 
 /**

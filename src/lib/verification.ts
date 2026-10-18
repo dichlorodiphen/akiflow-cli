@@ -25,6 +25,7 @@ export type ExpectedEventFields = Partial<
 		| "end_time"
 		| "start_datetime_tz"
 		| "end_datetime_tz"
+		| "recurrence"
 	>
 > & { location?: string | null };
 
@@ -168,7 +169,11 @@ async function verifyFields<T extends { id: string }>(
 			if (observed) {
 				const record = observed as T & Record<string, unknown>;
 				if (deletion) {
-					if (record.deleted_at != null) return result("verified");
+					if (
+						record.deleted_at != null ||
+						(path === "/v5/tasks" && record.status === 9)
+					)
+						return result("verified");
 					differingFields = ["deleted_at"];
 				} else
 					for (const [field, value] of Object.entries(expected)) {
@@ -181,6 +186,12 @@ async function verifyFields<T extends { id: string }>(
 					}
 				if (!deletion && record.deleted_at != null)
 					differingFields.push("deleted_at");
+				if (
+					!deletion &&
+					(record.status === "cancelled" ||
+						(path === "/v5/tasks" && record.status === 9))
+				)
+					differingFields.push("status");
 				if (differingFields.length === 0) return result("verified");
 				// Only an explicit async marker makes an observed difference pending.
 				// Mismatch describes this uncached observation, not provider causality.
@@ -247,5 +258,21 @@ export function verifyTimeSlotFields(
 		slotId,
 		expected,
 		opts,
+	);
+}
+
+/** A fresh tombstone proves slot deletion; absence alone remains uncertain. */
+export function verifyTimeSlotDeleted(
+	client: VerificationClient,
+	slotId: string,
+	opts: VerificationOptions = {},
+): Promise<VerificationResult<TimeSlot>> {
+	return verifyFields<TimeSlot>(
+		client,
+		"/v5/time_slots",
+		slotId,
+		{},
+		opts,
+		true,
 	);
 }

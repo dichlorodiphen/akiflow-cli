@@ -41,6 +41,19 @@ describe("createLogger", () => {
 		expect(first.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 	});
 
+	test("unserializable diagnostic metadata cannot break the operation being logged", () => {
+		process.env.AF_LOG = "1";
+		const log = createLogger({ module: "test" });
+		const circular: Record<string, unknown> = {};
+		circular.self = circular;
+		expect(() => log.warn("phase", "circular", circular)).not.toThrow();
+		expect(() => log.warn("phase", "bigint", { value: 1n })).not.toThrow();
+		log.info("phase", "valid");
+		expect(JSON.parse(readFileSync(join(dir, "af.log"), "utf8")).msg).toBe(
+			"valid",
+		);
+	});
+
 	test("auth-extract logger writes to auth.log when AF_LOG=1", () => {
 		process.env.AF_LOG = "1";
 		const log = createLogger({ module: "auth.extract", file: "auth.log" });

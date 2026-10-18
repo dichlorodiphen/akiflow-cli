@@ -6,6 +6,7 @@ import {
 	type ExpectedTaskFields,
 	verifyTaskDeleted,
 	verifyTaskFields,
+	verifyTimeSlotDeleted,
 	verifyTimeSlotFields,
 } from "./verification";
 import { verificationOptions } from "./verify-flag";
@@ -65,13 +66,15 @@ export async function taskMutationOutcome(
 			);
 			const result =
 				resource === "slot"
-					? await verifyTimeSlotFields(
-							client,
-							id,
-							expected as Partial<TimeSlot>,
-							verificationOptions(),
-						)
-					: "deleted_at" in expected
+					? expected.deleted_at != null
+						? await verifyTimeSlotDeleted(client, id, verificationOptions())
+						: await verifyTimeSlotFields(
+								client,
+								id,
+								expected as Partial<TimeSlot>,
+								verificationOptions(),
+							)
+					: expected.deleted_at != null
 						? await verifyTaskDeleted(client, id, verificationOptions())
 						: await verifyTaskFields(
 								client,

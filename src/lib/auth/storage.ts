@@ -34,7 +34,7 @@ export async function saveCredentials(
 	const credentials: Credentials = {
 		token,
 		clientId: clientId || crypto.randomUUID(),
-		expiryTimestamp: expiryTimestamp || Date.now() + 24 * 60 * 60 * 1000,
+		expiryTimestamp: expiryTimestamp ?? Date.now() + 24 * 60 * 60 * 1000,
 		refreshToken,
 	};
 
@@ -61,7 +61,24 @@ export async function loadCredentials(): Promise<Credentials | null> {
 	}
 
 	try {
-		return (await credentialsFile.json()) as Credentials;
+		const value: unknown = await credentialsFile.json();
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			return null;
+		const credentials = value as Credentials;
+		if (
+			typeof credentials.token !== "string" ||
+			!credentials.token.trim() ||
+			typeof credentials.clientId !== "string" ||
+			!credentials.clientId.trim() ||
+			typeof credentials.expiryTimestamp !== "number" ||
+			!Number.isFinite(credentials.expiryTimestamp) ||
+			!Number.isFinite(new Date(credentials.expiryTimestamp).getTime()) ||
+			(credentials.refreshToken !== undefined &&
+				(typeof credentials.refreshToken !== "string" ||
+					!credentials.refreshToken.trim()))
+		)
+			return null;
+		return credentials;
 	} catch {
 		return null;
 	}

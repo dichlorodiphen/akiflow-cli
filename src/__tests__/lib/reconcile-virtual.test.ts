@@ -81,45 +81,22 @@ function compare(
 	});
 }
 
-test("virtual occurrence matches Google through occurrence_anchor on server and cache", () => {
+test("RRULE predictions never establish observed server or cache occurrence presence", () => {
 	const events = [master({ read_only: true })];
 	const before = JSON.stringify(events);
 	const result = compare(events);
-	expect(result.tiers?.google_missing).toHaveLength(0);
-	expect(result.matches).toContainEqual(
-		expect.objectContaining({
-			akiflow_id: virtualId,
-			method: "occurrence_anchor",
-			confidence: "confirmed",
-			calendar: calendar.origin_id,
-			differences: [],
-		}),
-	);
-	expect(
-		normalize(events).find((record) => record.id === virtualId),
-	).toMatchObject({
-		state: "active",
-		in_window: true,
-		read_only: true,
-		is_series_master: false,
-		calendar: {
-			key: calendar.origin_id,
-			akiflow_id: calendar.id,
-			account_id: "account",
-		},
-		identity: {
-			series_id: "series",
-			anchor: slot,
-			anchor_kind: "instant",
-			provisional_anchor: false,
-		},
+	expect(result.tiers?.google_missing).toHaveLength(1);
+	expect(result.tiers?.google_missing[0]).toMatchObject({
+		reason: "both_gap",
+		server_presence: "absent",
+		cache_presence: "absent",
 	});
+	expect(result.matches).toHaveLength(0);
 	expect(
 		result.records
-			.filter((record) => record.id === virtualId)
-			.map((record) => record.observation)
-			.sort(),
-	).toEqual(["cache", "server"]);
+			.filter((record) => record.side === "akiflow")
+			.map((record) => record.id),
+	).toEqual(["master", "master"]);
 	expect(JSON.stringify(events)).toBe(before);
 });
 
@@ -172,36 +149,54 @@ test.each([
 	);
 });
 
-test("daily virtuals preserve 17:45 Los Angeles time across fall-back", () => {
+test("DST-correct materialized occurrences match by original anchor; predictions remain absent", () => {
 	const range = resolveReconcileWindow(
 		{ from: "2026-10-30", to: "2026-11-03" },
 		now,
 		calendar.timezone,
 	);
-	const events = [
-		master({
-			start_time: "2026-10-30T00:45:00Z",
-			end_time: "2026-10-30T02:45:00Z",
-		}),
-	];
-	const virtuals = normalize(events, range).filter((record) =>
-		record.id.startsWith("virtual:"),
-	);
-	expect(virtuals.map((record) => record.identity.anchor)).toEqual([
+	const series = master({
+		start_time: "2026-10-30T00:45:00Z",
+		end_time: "2026-10-30T02:45:00Z",
+	});
+	const anchors = [
 		"2026-10-31T00:45:00.000Z",
 		"2026-11-01T00:45:00.000Z",
 		"2026-11-02T01:45:00.000Z",
 		"2026-11-03T01:45:00.000Z",
 		"2026-11-04T01:45:00.000Z",
+	];
+	const observed = anchors.map((anchor, index) =>
+		af(`observed-${index}`, {
+			origin_id: null,
+			recurring_id: series.id,
+			original_start_time: anchor,
+			start_time: anchor,
+			end_time: new Date(Date.parse(anchor) + 7200000).toISOString(),
+			recurrence_exception: true,
+		}),
+	);
+	const records = normalize([series, ...observed], range);
+	expect(records.map((record) => record.id)).toEqual([
+		"master",
+		...observed.map((record) => record.id),
 	]);
-	for (const record of virtuals) {
-		expect(
-			formatInTimezone(record.identity.anchor ?? "", calendar.timezone),
-		).toMatchObject({ hours: 17, minutes: 45 });
-	}
+	expect(
+		records
+			.filter((record) => record.id !== "master")
+			.map((record) => record.identity.anchor),
+	).toEqual(anchors);
+	for (const anchor of anchors)
+		expect(formatInTimezone(anchor, calendar.timezone)).toMatchObject({
+			hours: 17,
+			minutes: 45,
+		});
 	const shifted = instance("2026-11-02T01:45:00Z");
 	const unshifted = instance("2026-11-02T00:45:00Z");
-	const result = compare(events, [shifted, unshifted], range);
+	const missing = compare([series], [shifted, unshifted], range);
+	expect(missing.tiers?.google_missing).toHaveLength(2);
+	expect(missing.matches).toHaveLength(0);
+	const result = compare([series, ...observed], [shifted, unshifted], range);
 	expect(result.matches).toContainEqual(
 		expect.objectContaining({
 			google_id: shifted.id,
@@ -214,7 +209,7 @@ test("daily virtuals preserve 17:45 Los Angeles time across fall-back", () => {
 	expect(result.tiers?.google_missing).toHaveLength(1);
 });
 
-test("visible series anchor is retained once and expanded input is idempotent", () => {
+test("visible observed anchor is retained once while synthetic inputs are discarded", () => {
 	const events = [
 		master({ start_time: slot, end_time: "2026-10-01T04:30:00Z" }),
 	];
@@ -229,7 +224,7 @@ test("visible series anchor is retained once and expanded input is idempotent", 
 		id: "virtual:master",
 		recurring_id: "virtual:master",
 	});
-	expect(normalize([syntheticMaster])).toHaveLength(1);
+	expect(normalize([syntheticMaster])).toHaveLength(0);
 });
 
 test.each([
@@ -245,12 +240,15 @@ test.each([
 	expect(normalize(events, window, true, [master()])).toHaveLength(1);
 });
 
-test("hidden masters still expand future slots; unselected calendars remain excluded", () => {
-	expect(
-		normalize([master({ hidden: true })]).find(
-			(record) => record.id === virtualId,
-		)?.state,
-	).toBe("active");
+test("hidden masters retain only their observed anchor; unselected calendars remain excluded", () => {
+	const observed = normalize([master({ hidden: true })]);
+	expect(observed).toHaveLength(1);
+	expect(observed[0]).toMatchObject({
+		id: "master",
+		state: "active",
+		in_window: false,
+	});
+	expect(observed.some((record) => record.id === virtualId)).toBe(false);
 	const records = normalizeAkiflow(
 		[master({ calendar_id: workCalendar.id })],
 		[calendar, workCalendar],
@@ -259,7 +257,9 @@ test("hidden masters still expand future slots; unselected calendars remain excl
 		"server",
 		now.toISOString(),
 	);
-	expect(records.find((record) => record.id === virtualId)).toMatchObject({
+	expect(records).toHaveLength(1);
+	expect(records[0]).toMatchObject({
+		id: "master",
 		state: "excluded",
 		exclusion_reason: "unselected_calendar",
 		calendar: { key: workCalendar.origin_id },

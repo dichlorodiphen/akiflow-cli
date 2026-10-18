@@ -90,7 +90,8 @@ export function providerEventPayload(
 	}
 
 	const location = eventLocation(event);
-	if (location) payload.location = location;
+	if (location || Object.hasOwn(event.content ?? {}, "location"))
+		payload.location = location;
 
 	if (event.attendees.length > 0) payload.attendees = event.attendees;
 	if (

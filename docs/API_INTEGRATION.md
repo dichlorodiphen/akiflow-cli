@@ -8,15 +8,15 @@ This document describes how to integrate with the Akiflow API using the AkiflowC
 
 The CLI uses browser-based token extraction to authenticate with Akiflow:
 
-- Supports Chrome, Arc, Brave, Edge, and Safari
-- Automatically scans browser cookies for JWT tokens
-- Stores credentials securely in Keychain (macOS) or XDG (Linux)
+- Discovers Chrome, Arc, Brave, Edge, Firefox, and Safari profiles on macOS
+- Explicit `af auth login` scans supported cookie/IndexedDB storage for Akiflow JWT tokens
+- Saves credentials in `$AF_CONFIG_DIR/credentials.json` (default `~/.config/af/credentials.json`), atomically with mode 0600. The macOS Keychain is read only to decrypt supported Chrome-family cookies; CLI credentials are not stored there.
 
 ## API Methods
 
 ### getTasks()
 
-Retrieves all tasks from Akiflow.
+Retrieves one paginated task response. Use `getAllTasks()` for a complete traversal; malformed/non-advancing pagination throws instead of returning partial results.
 
 ### upsertTasks(tasks)
 

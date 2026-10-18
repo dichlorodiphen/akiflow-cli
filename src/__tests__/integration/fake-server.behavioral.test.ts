@@ -16,7 +16,7 @@ const updateTiming = [
 ];
 const taskId = "11111111-1111-4111-8111-111111111111";
 beforeEach(() => {
-	server = new FakeAkiflowServer();
+	server = new FakeAkiflowServer({ echoOperationIds: true });
 	loadAllFixtures(server);
 	cli = localCliSession(server);
 });
@@ -41,11 +41,10 @@ async function create() {
 	]);
 }
 
-// All eight skipped assertions failed against the current CLI on 2026-09-30.
-// README.md records the observed failures and fixing workstream ownership.
+// Retain historical incident invariants as active regressions.
 describe("incident matrix against behavioral server (BDD)", () => {
 	// Workstream A: reject success:false envelopes without printing creation success.
-	test.skip("A I5: rejected envelope must not print event creation success", async () => {
+	test("A I5: rejected envelope must not print event creation success", async () => {
 		server.scenarios.fabricatedAcceptance(true);
 		const result = await create();
 		expect(server.operations.size).toBe(1);
@@ -54,7 +53,7 @@ describe("incident matrix against behavioral server (BDD)", () => {
 		expect(result.exitCode).not.toBe(0);
 	});
 	// Workstream A: surface failed operation receipts even when envelope.success is true.
-	test.skip("A I5: per-operation failure must be surfaced even in a success envelope", async () => {
+	test("A I5: per-operation failure must be surfaced even in a success envelope", async () => {
 		server.scenarios.fabricatedAcceptance();
 		const result = await create();
 		expect([...server.operations.values()][0]?.status).toBe("failed");
@@ -62,7 +61,7 @@ describe("incident matrix against behavioral server (BDD)", () => {
 		expect(result.exitCode).not.toBe(0);
 	});
 	// Workstream A: report each applied/failed result independently using operation receipts.
-	test.skip("A I5/I9: mixed batch must report applied and failed items independently", async () => {
+	test("A I5/I9: mixed batch must report applied and failed items independently", async () => {
 		const first = server.snapshot("events")[0]!;
 		server.seed("events", [
 			first,
@@ -79,18 +78,19 @@ describe("incident matrix against behavioral server (BDD)", () => {
 			"--search",
 			"Standup",
 			"--execute",
+			"--confirm",
 			"--json",
 		]);
-		expect([...server.operations.values()].map((op) => op.status)).toEqual([
-			"succeeded",
-			"failed",
-		]);
+		expect(
+			[...server.operations.values()].map((op) => op.status),
+			JSON.stringify(result),
+		).toEqual(["succeeded", "failed"]);
 		expect(result.exitCode).not.toBe(0);
 		const report = JSON.parse(result.stdout);
-		expect(report.failed).toBe(1);
+		expect(report.result.failed).toBe(1);
 	});
 	// Workstreams A/E: serialize competing edits or rebase field intents to preserve both changes.
-	test.skip("A/E I5: competing updates must preserve both independent field changes", async () => {
+	test("A/E I5: competing updates must preserve both independent field changes", async () => {
 		await rebuild();
 		server.scenarios.staleBaseChain();
 		const gate = server.gate({ path: "/v5/event_operations" });
@@ -120,14 +120,17 @@ describe("incident matrix against behavioral server (BDD)", () => {
 			gate.release();
 		}
 		const outcomes = await Promise.all([titleUpdate, descriptionUpdate]);
-		expect(outcomes.map((result) => result.exitCode)).toEqual([0, 0]);
+		expect(
+			outcomes.map((result) => result.exitCode),
+			JSON.stringify(outcomes),
+		).toEqual([0, 0]);
 		const stored = server.snapshot("events")[0]!;
 		expect([...server.operations.values()]).toHaveLength(2);
 		expect(stored.title).toBe("Changed title");
 		expect(stored.description).toBe("Changed description");
 	});
 	// Workstream C: retain exclusive ownership for the entire cache rebuild and publication.
-	test.skip("C I9: overlapping rebuilds must keep the second writer outside the first rebuild", async () => {
+	test("C I9: overlapping rebuilds must keep the second writer outside the first rebuild", async () => {
 		const gate = server.scenarios.lockRace();
 		const first = cli.run(["refresh", "--rebuild", "--json"]);
 		await gate.entered;
@@ -181,7 +184,7 @@ describe("incident matrix against behavioral server (BDD)", () => {
 		});
 	});
 	// Workstream E: reject cancelled targets; update intent must never infer deletion.
-	test.skip("E I7: update of a cancelled event must never dispatch a delete", async () => {
+	test("E I7: update of a cancelled event must never dispatch a delete", async () => {
 		const event = server.snapshot("events")[0]!;
 		server.seed("events", [{ ...event, status: "cancelled" }]);
 		await rebuild();

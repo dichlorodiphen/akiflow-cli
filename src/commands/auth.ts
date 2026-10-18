@@ -58,6 +58,7 @@ async function interactiveAuth(): Promise<void> {
 		console.log("2. Run 'af auth login' again to extract your session token");
 
 		// Avoid hard-exiting (helps tests and embedding).
+		process.exitCode = 1;
 		return;
 	}
 
@@ -76,12 +77,13 @@ async function interactiveAuth(): Promise<void> {
 			const answer = await rl.question(
 				`\nSelect token to use (1-${tokens.length}): `,
 			);
-			const parsed = parseInt(answer, 10);
+			const parsed = /^\d+$/.test(answer.trim()) ? Number(answer.trim()) : NaN;
 
 			if (Number.isNaN(parsed) || parsed < 1 || parsed > tokens.length) {
 				console.error(
 					`Invalid selection. Please enter a number between 1 and ${tokens.length}`,
 				);
+				process.exitCode = 1;
 				return;
 			}
 

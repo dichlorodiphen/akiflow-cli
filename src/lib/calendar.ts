@@ -134,8 +134,10 @@ export function resolveCalendarFromList(
 	const exactId = candidates.find((calendar) => calendar.id === query);
 	if (exactId) return exactId;
 
-	const exactOriginId = candidates.find(
-		(calendar) => calendar.origin_id === query,
+	const exactOriginId = requireUniqueMatch(
+		query,
+		"origin ID",
+		candidates.filter((calendar) => calendar.origin_id === query),
 	);
 	if (exactOriginId) return exactOriginId;
 

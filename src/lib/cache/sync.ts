@@ -140,15 +140,25 @@ async function syncAttempt<
 		}
 		pages++;
 
-		// Cursor must advance; non-advancing cursor is an explicit error.
-		if (resp.sync_token) {
-			if (seenTokens.has(resp.sync_token)) {
-				throw new Error(
-					`sync ${opts.resource}: sync_token did not advance (${resp.sync_token}); terminating to avoid infinite loop`,
-				);
-			}
-			seenTokens.add(resp.sync_token);
-			token = resp.sync_token;
+		// Every page must supply a usable cursor, including delta terminal pages.
+		// Otherwise an old cursor can be published as fresh or requested forever.
+		if (typeof resp.sync_token !== "string" || !resp.sync_token.trim()) {
+			throw new Error(
+				`sync ${opts.resource}: no sync_token returned from server`,
+			);
+		}
+		if (
+			seenTokens.has(resp.sync_token) ||
+			(resp.has_next_page && resp.sync_token === token)
+		) {
+			throw new Error(
+				`sync ${opts.resource}: sync_token did not advance; terminating to avoid infinite loop`,
+			);
+		}
+		seenTokens.add(resp.sync_token);
+		token = resp.sync_token;
+		if (!Array.isArray(resp.data)) {
+			throw new Error(`sync ${opts.resource}: expected an array of records`);
 		}
 
 		const dataRecords = resp.data as unknown as T[];

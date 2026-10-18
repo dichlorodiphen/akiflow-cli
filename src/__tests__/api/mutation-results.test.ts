@@ -147,16 +147,16 @@ describe("event mutation receipts", () => {
 			),
 		).toEqual(["unknown", "unknown"]);
 	});
-	it("keeps empty data unknown even if an envelope names a failure", () => {
+	it("identifies explicit failure even when operation data is empty", () => {
 		const result = parseEventMutationResult(
 			envelope({ data: [], failed: [{ id: "a", error: "rejected" }] }),
 			submitted,
 		);
 		expect(result.receipts.map((receipt) => receipt.status)).toEqual([
-			"unknown",
+			"failed",
 			"unknown",
 		]);
-		expect(result.receipts[0]?.error).toContain("rejected");
+		expect(result.receipts[0]?.error).toBe("rejected");
 	});
 });
 

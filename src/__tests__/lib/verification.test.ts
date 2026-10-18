@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AkiflowClient } from "../../lib/api/client";
-import type { ApiResponse } from "../../lib/api/types";
+import type { ApiResponse, CreateEventPayload } from "../../lib/api/types";
+import { eventExpectedFields } from "../../lib/mutation-output";
 import {
 	verifyEventDeleted,
 	verifyEventFields,
@@ -299,4 +300,56 @@ describe("fresh deletion verification", () => {
 			(await verifyTaskDeleted(tombstone.client, event.id, bounds)).status,
 		).toBe("verified");
 	});
+});
+
+it("never verifies a cancelled event as a live conversion target", async () => {
+	const { client } = transport(() => ({
+		success: true,
+		message: null,
+		data: [{ ...event, status: "cancelled" }],
+	}));
+	const result = await verifyEventFields(client, event.id, {}, bounds);
+	expect(result.status).toBe("mismatch");
+	expect(result.differingFields).toContain("status");
+});
+
+it("recognizes status-only task tombstones for deletion verification", async () => {
+	const { client } = transport(() => ({
+		success: true,
+		message: null,
+		data: [{ id: "task", status: 9, deleted_at: null }],
+	}));
+	expect((await verifyTaskDeleted(client, "task", bounds)).status).toBe(
+		"verified",
+	);
+});
+
+it("creation verification rejects a missing or changed requested recurrence", async () => {
+	const payload = {
+		...event,
+		recurrence: ["RRULE:FREQ=DAILY"],
+		content: event.content,
+	} as unknown as CreateEventPayload;
+	const desired = eventExpectedFields(payload);
+	expect(desired.recurrence).toEqual(["RRULE:FREQ=DAILY"]);
+	for (const recurrence of [undefined, null, ["RRULE:FREQ=WEEKLY"]]) {
+		const fake = transport(() => page([{ ...event, recurrence }]));
+		const result = await verifyEventFields(fake.client, event.id, desired, {
+			...bounds,
+			singlePoll: true,
+		});
+		expect(result.status).toBe("mismatch");
+		expect(result.differingFields).toEqual(["recurrence"]);
+	}
+	const fake = transport(() =>
+		page([{ ...event, recurrence: payload.recurrence }]),
+	);
+	expect(
+		(
+			await verifyEventFields(fake.client, event.id, desired, {
+				...bounds,
+				singlePoll: true,
+			})
+		).status,
+	).toBe("verified");
 });

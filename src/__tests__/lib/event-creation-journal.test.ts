@@ -38,46 +38,46 @@ function entry(id: string) {
 }
 
 describe("event-creation journal", () => {
-	test("starts empty", () => {
+	test("starts empty", async () => {
 		expect(wasCreatedByCli("event-1")).toBe(false);
 		expect(loadCreatedEventJournal().entries).toEqual([]);
 		expect(loadCreatedEventIds().size).toBe(0);
 	});
 
-	test("records and finds created events", () => {
-		recordCreatedEvent(entry("event-1"));
+	test("records and finds created events", async () => {
+		await recordCreatedEvent(entry("event-1"));
 		expect(wasCreatedByCli("event-1")).toBe(true);
 		expect(wasCreatedByCli("event-2")).toBe(false);
 		expect(loadCreatedEventIds()).toEqual(new Set(["event-1"]));
 	});
 
-	test("recording is idempotent (no duplicates)", () => {
-		recordCreatedEvent(entry("event-1"));
-		recordCreatedEvent(entry("event-1"));
+	test("recording is idempotent (no duplicates)", async () => {
+		await recordCreatedEvent(entry("event-1"));
+		await recordCreatedEvent(entry("event-1"));
 		expect(loadCreatedEventJournal().entries).toHaveLength(1);
 	});
 
-	test("clear removes the entry", () => {
-		recordCreatedEvent(entry("event-1"));
-		recordCreatedEvent(entry("event-2"));
-		clearCreatedEvent("event-1");
+	test("clear removes the entry", async () => {
+		await recordCreatedEvent(entry("event-1"));
+		await recordCreatedEvent(entry("event-2"));
+		await clearCreatedEvent("event-1");
 		expect(wasCreatedByCli("event-1")).toBe(false);
 		expect(wasCreatedByCli("event-2")).toBe(true);
 	});
 
-	test("clear is a no-op for unknown ids", () => {
-		recordCreatedEvent(entry("event-1"));
-		clearCreatedEvent("missing");
+	test("clear is a no-op for unknown ids", async () => {
+		await recordCreatedEvent(entry("event-1"));
+		await clearCreatedEvent("missing");
 		expect(loadCreatedEventJournal().entries).toHaveLength(1);
 	});
 
-	test("corrupt journal reads as empty", () => {
+	test("corrupt journal reads as empty", async () => {
 		writeFileSync(join(testDir, "created-events-journal.json"), "{nope");
 		expect(wasCreatedByCli("event-1")).toBe(false);
 		expect(loadCreatedEventJournal().entries).toEqual([]);
 	});
 
-	test("wrong-version journal reads as empty", () => {
+	test("wrong-version journal reads as empty", async () => {
 		writeFileSync(
 			join(testDir, "created-events-journal.json"),
 			JSON.stringify({ version: 2, entries: [entry("event-1")] }),
@@ -87,15 +87,15 @@ describe("event-creation journal", () => {
 });
 
 describe("deleteNeedsConfirmation", () => {
-	test("needs confirmation for events the CLI did not create", () => {
+	test("needs confirmation for events the CLI did not create", async () => {
 		expect(deleteNeedsConfirmation("foreign-1", new Set(["own-1"]))).toBe(true);
 	});
 
-	test("no confirmation needed for CLI-created events", () => {
+	test("no confirmation needed for CLI-created events", async () => {
 		expect(deleteNeedsConfirmation("own-1", new Set(["own-1"]))).toBe(false);
 	});
 
-	test("empty journal means every delete needs confirmation", () => {
+	test("empty journal means every delete needs confirmation", async () => {
 		expect(deleteNeedsConfirmation("anything", new Set())).toBe(true);
 	});
 });

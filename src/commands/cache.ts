@@ -6,7 +6,7 @@ import { readTasks } from "../lib/tasks";
 export const cacheRefreshCommand = defineCommand({
 	meta: {
 		name: "refresh",
-		description: "Refresh local tasks cache (full resync)",
+		description: "Refresh local task observations (delta sync)",
 	},
 	run: async () => {
 		const client = createClient();
@@ -37,6 +37,6 @@ export const cacheCommand = defineCommand({
 	},
 	run: async () => {
 		console.log("Cache subcommands:");
-		console.log("  refresh - Full resync of local task cache");
+		console.log("  refresh - Delta sync of local task cache");
 	},
 });

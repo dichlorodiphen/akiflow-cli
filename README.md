@@ -21,7 +21,7 @@ This repository adapts [code-yeongyu/akiflow-cli](https://github.com/code-yeongy
 ```bash
 git clone https://github.com/dichlorodiphen/akiflow-cli.git
 cd akiflow-cli
-bun install
+bun install --frozen-lockfile
 bun run build
 mkdir -p ~/.local/bin
 install -m 0755 ./af ~/.local/bin/af
@@ -70,14 +70,14 @@ af event update <event-id> --date 2026-06-20 --at 14:30 --duration 45m \
   --title "Updated meeting" --description-file details.txt
 
 af event delete <event-id>
-af event delete <event-id> --notify none
+af event delete <event-id> --send-updates none
 af event delete <event-id> --confirm   # required when the event was not created by this CLI
 
 af event attendees add <event-id> julia@example.com alex@example.com
 af event attendees remove <event-id> julia@example.com
 ```
 
-Event v1 supports cached, timed, non-recurring, writable Google Calendar events only. Create, update, and delete use Akiflow's asynchronous v5 event-operations API. It does not support recurrence, all-day events, reminders, or conferencing. Deletes send Google update notifications through Akiflow by default; use `af event delete --notify none` for disposable cleanup. Deleting an event this CLI did not create requires `--confirm` (the Akiflow server propagates deletes to Google Calendar, so the CLI keeps a creation journal of its own events and refuses foreign targets without explicit confirmation). The attendee subcommands remain exposed for compatibility, but Akiflow has deprecated their captured v3 modifier endpoint and their v5 replacement is not yet implemented.
+Events support timed writable Google records through Akiflow's asynchronous v5 operations. Recurring creation uses `--rrule`; series edits/deletes require `--scope series` and the master ID. `--truncate-before YYYY-MM-DD` cuts off future series occurrences before that local day. Per-instance edits/deletes, all-day writes, reminders, and conferencing remain unsupported. Attendee add/remove use v5 patches. Guest notifications default to silent (`--send-updates none`); use `--send-updates all` to notify. Deleting or truncating an event this CLI did not create requires `--confirm`. An accepted receipt establishes submission, not provider application; use `--verify` for fresh Akiflow field confirmation.
 
 ### Batch Operations
 
@@ -88,7 +88,7 @@ af batch events attendees add julia@example.com \
   --search "Portland trip:" --from 2026-06-19 --to 2026-06-23 --execute
 
 af batch events attendees remove julia@example.com --date 2026-06-20 --search "Portland" --execute
-af batch events delete --date 2026-06-20 --search "Test event" --notify none --execute
+af batch events delete --date 2026-06-20 --search "Test event" --send-updates none --execute
 af batch slots delete --from 2026-06-19 --until 2026-06-23 --search "Temp" --execute
 ```
 
@@ -114,7 +114,7 @@ af slot update <slot-id> --remove-task-id task-uuid-1
 af slot delete <slot-id>
 ```
 
-`af slot update` moves, resizes, renames, or changes existing task membership for a true Akiflow task slot. It does not create new tasks during update.
+`af slot update` moves, resizes, renames, or changes existing task membership for a true Akiflow task slot. It does not create new tasks during update. Slot updates interpret dates/times in the stored slot timezone. Repeat `--task-id`, `--add-task-id`, or `--remove-task-id` to include multiple existing tasks.
 
 ### Calendar
 
@@ -142,7 +142,7 @@ af convert tasks --to events --search "Portland trip:" --from 2026-06-19 --until
   --calendar "Personal" --execute --delete-source
 ```
 
-Conversion dry-runs by default. `--execute` creates missing events; `--delete-source` soft-deletes native source tasks only after all selected targets are created or matched. Connector-backed tasks require `--include-connector-tasks` and are never deleted by conversion v1.
+Conversion dry-runs by default. `--execute` creates missing events; `--delete-source` soft-deletes native source tasks only after every selected target passes fresh field verification. Target IDs are reserved in a locked journal before submission; uncertain or missing prior targets block recreation. Connector-backed tasks require `--include-connector-tasks` and are never deleted by conversion v1.
 
 ### Projects, Cache, Diagnostics
 
@@ -195,3 +195,9 @@ schedule watcher's `hatch_gws_cli`, or a compatible executable selected with
 `--google-cmd` or `HATCH_GWS_CLI`. Its OAuth behavior must be verified separately
 before treating a live invocation as read-only. See [the command reference](docs/COMMANDS.md#af-reconcile)
 for coverage, evidence, schema, and exit codes.
+
+
+Build verification uses Bun 1.3.14 and CI runs on Linux and macOS in UTC and
+America/Los_Angeles. `node_modules` is generated locally and must not be committed
+as a machine-specific symlink. The package version identifies the release version;
+for local patched builds, retain the source revision and patch alongside the binary.

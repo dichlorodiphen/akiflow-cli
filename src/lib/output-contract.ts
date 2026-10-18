@@ -115,7 +115,7 @@ export function classifyExit(
 	)
 		return EXIT_CODES.validation;
 	if (
-		/API error|API request failed|Failed to connect to Akiflow API|Failed to parse API response|HTTP [45]\d\d|NetworkError|fetch failed|Failed to fetch/i.test(
+		/API error|API request (?:failed|timed out)|Failed to connect to Akiflow API|Failed to parse API response|HTTP [45]\d\d|NetworkError|fetch failed|Failed to fetch/i.test(
 			message,
 		)
 	)
@@ -127,16 +127,15 @@ export function outputMode(
 	argv: string[],
 	envEnvelope = process.env.AF_JSON_ENVELOPE,
 ): { enabled: boolean; requestedJson: boolean } {
-	let enabled = envEnvelope === "1";
-	let requestedJson = false;
+	const modes = { envelope: envEnvelope === "1", json: false, raw: false };
 	for (const token of argv) {
 		if (token === "--") break;
-		if (token === "--envelope" || token === "--envelope=true") enabled = true;
-		if (token === "--no-envelope" || token === "--envelope=false")
-			enabled = false;
-		if (/^--(?:json|raw)(?:=true)?$/.test(token)) requestedJson = true;
+		const match = /^--(no-)?(envelope|json|raw)(?:=(true|false))?$/.exec(token);
+		if (!match) continue;
+		const name = match[2] as keyof typeof modes;
+		modes[name] = match[1] ? match[3] === "false" : match[3] !== "false";
 	}
-	return { enabled, requestedJson };
+	return { enabled: modes.envelope, requestedJson: modes.json || modes.raw };
 }
 
 /** Install once at the executable boundary so direct command helpers retain their legacy API. */

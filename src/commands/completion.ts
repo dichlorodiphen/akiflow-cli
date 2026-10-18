@@ -52,11 +52,24 @@ function generateBashCompletion(COMMANDS: Record<string, CommandNode>): string {
 
 	return `#!/bin/bash
 _af_completion() {
-  local cur words cword
+  local cur cword i
+  local -a words
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
-  words=("\${COMP_WORDS[@]}")
+  words=("\${COMP_WORDS[0]}")
   cword=$COMP_CWORD
+  # Remove only complete global booleans before the cursor. Preserve all
+  # other words, including inline string values containing flag text.
+  for ((i=1; i<\${#COMP_WORDS[@]}; i++)); do
+    if (( i < COMP_CWORD )); then
+      case "\${COMP_WORDS[i]}" in
+        --) return 0 ;;
+        --envelope|--envelope=true|--envelope=false|--no-envelope|--no-envelope=true|--no-envelope=false)
+          ((cword--)); continue ;;
+      esac
+    fi
+    words+=("\${COMP_WORDS[i]}")
+  done
 
   if [[ $cword -eq 1 ]]; then
     COMPREPLY=($(compgen -W "${commands}" -- "$cur"))
@@ -69,76 +82,104 @@ complete -o bashdefault -o default -F _af_completion af
 `;
 }
 
-function zshCommandEntries(commands: Record<string, CommandNode>): string {
-	return Object.entries(commands)
-		.map(([name, node]) => `'${name}:${node.description}'`)
-		.join("\n    ");
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function generateZshCompletion(COMMANDS: Record<string, CommandNode>): string {
-	const main = zshCommandEntries(COMMANDS);
-	const cases = Object.entries(COMMANDS)
-		.map(([name, node]) => {
-			const subs = node.subcommands ? zshCommandEntries(node.subcommands) : "";
-			const flags = (node.flags ?? []).map((flag) => `'${flag}'`).join(" ");
+	const cases = collectCommandPaths(COMMANDS)
+		.sort((a, b) => b.path.length - a.path.length)
+		.map(({ path, node }) => {
+			const condition = path
+				.map(
+					(segment, index) =>
+						`"\${command_words[${index + 2}]}" == ${shellQuote(segment)}`,
+				)
+				.join(" && ");
+			const suggestions = [...subcommandNames(node), ...node.flags]
+				.map(shellQuote)
+				.join(" ");
 			return `
-        ${name})
-          ${subs ? `_describe 'subcommand' "(${subs})"` : `_arguments ${flags}`}
-          ;;`;
+  if [[ ${condition} && $command_current -ge ${path.length + 2} ]]; then
+    suggestions=(${suggestions})
+    _describe 'argument' suggestions
+    return
+  fi`;
 		})
 		.join("");
-
 	return `#compdef af
 _af() {
-  local -a commands=(
-    ${main}
-  )
-  _arguments -C '1: :->command' '*::arg:->args'
-  case $state in
-    command)
-      _describe 'command' commands
-      ;;
-    args)
-      case \${words[2]} in${cases}
+  local -a suggestions command_words
+  local command_current=$CURRENT i
+  command_words=("\${words[1]}")
+  for ((i=2; i<=\${#words}; i++)); do
+    if (( i < CURRENT )); then
+      case "\${words[i]}" in
+        --) return ;;
+        --envelope|--envelope=true|--envelope=false|--no-envelope|--no-envelope=true|--no-envelope=false)
+          ((command_current--)); continue ;;
       esac
-      ;;
-  esac
+    fi
+    command_words+=("\${words[i]}")
+  done
+  if (( command_current == 2 )); then
+    suggestions=(${Object.keys(COMMANDS).map(shellQuote).join(" ")})
+    _describe 'command' suggestions
+    return
+  fi
+${cases}
 }
 _af
 `;
 }
 
-function fishLines(
-	prefix: string[],
-	commands: Record<string, CommandNode>,
-): string[] {
-	const parent = prefix.at(-1);
-	const condition = parent
-		? `__fish_seen_subcommand_from ${parent}`
-		: "__fish_use_subcommand_from_list";
-	const lines = Object.entries(commands).map(
-		([name, node]) =>
-			`complete -c af -f -n "${condition}" -a "${name}" -d "${node.description}"`,
-	);
-
-	for (const [name, node] of Object.entries(commands)) {
-		if (node.flags) {
-			for (const flag of node.flags) {
-				if (!flag.startsWith("--")) continue;
-				lines.push(
-					`complete -c af -n "__fish_seen_subcommand_from ${name}" -l ${flag.slice(2)} -d "${node.description}"`,
-				);
-			}
-		}
-		if (node.subcommands)
-			lines.push(...fishLines([...prefix, name], node.subcommands));
-	}
-
-	return lines;
-}
-
 function generateFishCompletion(COMMANDS: Record<string, CommandNode>): string {
-	return `# Fish completion for af\n${fishLines([], COMMANDS).join("\n")}\n`;
+	const lines: string[] = [];
+	for (const { path, node } of collectCommandPaths(COMMANDS)) {
+		const parent = path.slice(0, -1).join(" ");
+		lines.push(
+			`complete -c af -f -n '__af_path ${parent}' -a ${shellQuote(path.at(-1) ?? "")} -d ${shellQuote(node.description)}`,
+		);
+		for (const flag of node.flags) {
+			const option = flag.startsWith("--")
+				? `-l ${flag.slice(2)}`
+				: `-s ${flag.slice(1)}`;
+			lines.push(
+				`complete -c af -n '__af_path_flags ${path.join(" ")}' ${option} -d ${shellQuote(node.description)}`,
+			);
+		}
+	}
+	return `# Fish completion for af
+function __af_tokens
+    set -l tokens (commandline -opc)
+    contains -- -- $tokens; and return 1
+    for token in $tokens
+        switch $token
+            case --envelope --envelope=true --envelope=false --no-envelope --no-envelope=true --no-envelope=false
+                continue
+        end
+        printf '%s\\n' "$token"
+    end
+end
+function __af_path_flags
+    set -l tokens (__af_tokens); or return 1
+    set -l size (count $argv)
+    test (count $tokens) -ge (math $size + 1); or return 1
+    if test $size -eq 0
+        test (count $tokens) -eq 1
+        return
+    end
+    for i in (seq $size)
+        test "$tokens[(math $i + 1)]" = "$argv[$i]"; or return 1
+    end
+end
+function __af_path
+    __af_path_flags $argv; or return 1
+    set -l tokens (__af_tokens); or return 1
+    test (count $tokens) -eq (math (count $argv) + 1)
+end
+${lines.join("\n")}
+`;
 }
 
 export const completionCommand = defineCommand({

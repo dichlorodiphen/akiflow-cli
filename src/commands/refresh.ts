@@ -11,7 +11,8 @@ export const refreshCommand = defineCommand({
 	args: {
 		rebuild: {
 			type: "boolean",
-			description: "Delete cache and full-sync from scratch",
+			description:
+				"Rebuild observations with a full sync; preserve local journals",
 		},
 		json: {
 			type: "boolean",

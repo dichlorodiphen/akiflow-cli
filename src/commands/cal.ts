@@ -2,7 +2,7 @@ import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
 import type { Event } from "../lib/api/types";
 import { CalendarResolutionError } from "../lib/calendar";
-import { formatLocalDate, parseLocalDate } from "../lib/date-parser";
+import { parseLocalDate } from "../lib/date-parser";
 import {
 	detectDuplicateEvents,
 	detectPossibleReshapes,
@@ -14,6 +14,7 @@ import { emptyContext, toCleanedCalView } from "../lib/format/cleaned-types";
 import type { Occurrence } from "../lib/occurrence";
 import { readOccurrences } from "../lib/occurrence-read";
 import { buildReviewEnvelope } from "../lib/review-envelope";
+import { formatInTimezone, utcToDateString } from "../lib/timezone";
 
 /** Warn when the events cache is older than this; stale reads once caused a
  * deleted event to be reported as live (2026-09-30: a 16-min-old cache showed
@@ -24,7 +25,7 @@ function cacheStalenessWarning(
 	observedAt: Record<string, string | null> | undefined,
 ): string | null {
 	const ts = observedAt?.events;
-	if (!ts) {
+	if (!ts || !Number.isFinite(Date.parse(ts))) {
 		return "Calendar cache has never been synced — run `af refresh --rebuild` before trusting this view.";
 	}
 	const ageMs = Date.now() - Date.parse(ts);
@@ -36,14 +37,21 @@ function cacheStalenessWarning(
 	);
 }
 
-function time(date: Date): string {
-	return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+function time(
+	date: Date,
+	timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string {
+	const wall = formatInTimezone(date.toISOString(), timezone);
+	return `${String(wall.hours).padStart(2, "0")}:${String(wall.minutes).padStart(2, "0")}`;
 }
-export function formatMergedTimeline(entries: Occurrence[]): string {
+export function formatMergedTimeline(
+	entries: Occurrence[],
+	timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string {
 	if (!entries.length) return "(no events, slots, or scheduled tasks in range)";
 	const days = new Map<string, Occurrence[]>();
 	for (const o of entries) {
-		const day = formatLocalDate(o.start);
+		const day = utcToDateString(o.start.toISOString(), timezone);
 		const group = days.get(day) ?? [];
 		group.push(o);
 		days.set(day, group);
@@ -51,7 +59,7 @@ export function formatMergedTimeline(entries: Occurrence[]): string {
 	return [...days]
 		.map(
 			([day, group]) =>
-				`${(parseLocalDate(day)!).toDateString()}\n\n${group.map((o) => `  ${time(o.start)} — ${o.end ? time(o.end) : "    "}   ${{ event: "📅", slot: "⏰", task: "📌" }[o.source]}  ${o.title ?? `(untitled ${o.source})`}`).join("\n")}`,
+				`${(parseLocalDate(day)!).toDateString()}\n\n${group.map((o) => `  ${time(o.start, timezone)} — ${o.end ? time(o.end, timezone) : "    "}   ${{ event: "📅", slot: "⏰", task: "📌" }[o.source]}  ${o.title ?? `(untitled ${o.source})`}`).join("\n")}`,
 		)
 		.join("\n\n");
 }
@@ -71,15 +79,19 @@ export async function runMergedCalendar(
 			process.exit(2);
 		}
 	}
-	const { snapshot, pairs, window, minMinutes } = await readOccurrences(
-		createClient(),
-		args,
-	);
+	const { snapshot, pairs, window, minMinutes, timezone, recurrenceWarnings } =
+		await readOccurrences(createClient(), args);
 	const occurrences = pairs.map((p) => p.occurrence);
-	const envelope = buildReviewEnvelope(occurrences, window, minMinutes);
+	const envelope = buildReviewEnvelope(
+		occurrences,
+		window,
+		minMinutes,
+		undefined,
+		timezone,
+	);
 	// Freshness + duplicate warnings. A stale cache once made a deleted event
 	// look live; surface both signals so readers know when to rebuild first.
-	const warnings: string[] = [];
+	const warnings: string[] = [...recurrenceWarnings];
 	const stale = cacheStalenessWarning(snapshot.observedAt);
 	if (stale) warnings.push(stale);
 	const eventRaws = pairs
@@ -118,7 +130,7 @@ export async function runMergedCalendar(
 					? envelope.free_windows
 							.map(
 								(w) =>
-									`${time(new Date(w.start))} — ${time(new Date(w.end))} (${Math.round((Date.parse(w.end) - Date.parse(w.start)) / 60000)} min)`,
+									`${`${utcToDateString(w.start, timezone)} ${time(new Date(w.start), timezone)}`} — ${`${utcToDateString(w.end, timezone)} ${time(new Date(w.end), timezone)}`} (${Math.round((Date.parse(w.end) - Date.parse(w.start)) / 60000)} min)`,
 							)
 							.join("\n")
 					: "(no free windows in range)",
@@ -158,7 +170,7 @@ export async function runMergedCalendar(
 		return;
 	}
 	warnHuman();
-	console.log(formatMergedTimeline(occurrences));
+	console.log(formatMergedTimeline(occurrences, timezone));
 }
 export function readFailure(error: unknown): never {
 	const message =

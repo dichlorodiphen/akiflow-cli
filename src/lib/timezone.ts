@@ -337,7 +337,19 @@ export function addCalendarDays(
 	const newDay = wallDate.getUTCDate();
 	const dateStr = `${newYear}-${String(newMonth).padStart(2, "0")}-${String(newDay).padStart(2, "0")}`;
 
-	return zonedTimeToUtc(dateStr, wall.hours, wall.minutes, timeZone, fold);
+	const shifted = zonedTimeToUtc(
+		dateStr,
+		wall.hours,
+		wall.minutes,
+		timeZone,
+		fold,
+	);
+	const original = new Date(utcIso);
+	return new Date(
+		Date.parse(shifted) +
+			original.getUTCSeconds() * 1000 +
+			original.getUTCMilliseconds(),
+	).toISOString();
 }
 
 /**
@@ -358,4 +370,24 @@ export function addElapsedMillis(utcIso: string, millis: number): string {
 export function utcToDateString(utcIso: string, timeZone: string): string {
 	const wall = formatInTimezone(utcIso, timeZone);
 	return `${wall.year}-${String(wall.month).padStart(2, "0")}-${String(wall.day).padStart(2, "0")}`;
+}
+
+/** First existing instant of a civil date, including zones whose DST skips midnight. */
+export function calendarDayStartUtc(date: string, timezone: string): string {
+	validateTimezone(timezone);
+	parseCalendarDate(date);
+	for (let minute = 0; minute < 1440; minute++) {
+		try {
+			return zonedTimeToUtc(
+				date,
+				Math.floor(minute / 60),
+				minute % 60,
+				timezone,
+				"first",
+			);
+		} catch (error) {
+			if (!(error instanceof DSTGapError)) throw error;
+		}
+	}
+	throw new Error(`Calendar day ${date} does not exist in ${timezone}`);
 }

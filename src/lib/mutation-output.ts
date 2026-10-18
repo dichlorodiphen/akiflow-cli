@@ -15,6 +15,7 @@ export function eventExpectedFields(
 		start_time: payload.start_time,
 		end_time: payload.end_time,
 		start_datetime_tz: payload.start_datetime_tz,
+		...(payload.recurrence != null ? { recurrence: payload.recurrence } : {}),
 		...(payload.end_datetime_tz !== undefined
 			? { end_datetime_tz: payload.end_datetime_tz }
 			: {}),

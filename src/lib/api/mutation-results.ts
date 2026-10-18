@@ -45,21 +45,16 @@ export function parseEventMutationResult(
 				result: record?.result ?? null,
 			};
 			const errors: unknown[] = [...warnings];
-			if (!Array.isArray(raw.data) || raw.data.length === 0) {
-				errors.push(raw.message ?? "Response omitted operation results");
-				if (failure?.error !== undefined) errors.push(failure.error);
-			} else if (ambiguousEnvelope) {
-				errors.push(
-					raw.message ?? "Envelope failure has no identifiable operation ID",
-				);
-			} else if (
-				failure ||
-				record?.failed_at != null ||
-				record?.status === "failed"
-			) {
+			if (failure || record?.failed_at != null || record?.status === "failed") {
 				receipt.status = "failed";
 				errors.push(
 					failure?.error ?? record?.result ?? raw.message ?? "Operation failed",
+				);
+			} else if (!Array.isArray(raw.data) || raw.data.length === 0) {
+				errors.push(raw.message ?? "Response omitted operation results");
+			} else if (ambiguousEnvelope) {
+				errors.push(
+					raw.message ?? "Envelope failure has no identifiable operation ID",
 				);
 			} else if (record) {
 				if (record.status === "pending" && record.processed_at == null) {

@@ -1,11 +1,14 @@
 import type { Event, Task, TimeSlot } from "./api/types";
-import { parseLocalDate } from "./date-parser";
+import { formatLocalDate, parseLocalDate } from "./date-parser";
 import { filterEvents } from "./filters/event";
 import {
 	coveredRecurringSlots,
+	excludedRecurringSlots,
 	expandRecurringEvents,
 	isRecurringEventMaster,
 } from "./recurrence-expansion";
+
+import { calendarDayStartUtc } from "./timezone";
 
 export type OccurrenceSource = "event" | "slot" | "task";
 export interface RecurrenceIdentity {
@@ -46,6 +49,8 @@ export interface Occurrence {
 	};
 }
 export interface OccurrenceQuery {
+	timezone?: string;
+	recurrenceWarnings?: string[];
 	from?: Date;
 	to?: Date;
 	accountId?: string;
@@ -120,9 +125,12 @@ function base(
 		},
 	};
 }
-export function normalizeEvent(event: Event): Occurrence | null {
+export function normalizeEvent(
+	event: Event,
+	timezone?: string,
+): Occurrence | null {
 	const allDay = event.start_date != null;
-	const start =
+	let start =
 		event.start_date != null
 			? parseLocalDate(event.start_date)
 			: parsed(event.start_time);
@@ -135,6 +143,14 @@ export function normalizeEvent(event: Event): Occurrence | null {
 		end.setDate(end.getDate() + 1);
 	} else {
 		end = parsed(event.end_time);
+	}
+	if (allDay && timezone) {
+		try {
+			start = new Date(calendarDayStartUtc(event.start_date!, timezone));
+			end = new Date(calendarDayStartUtc(formatLocalDate(end!), timezone));
+		} catch {
+			return null;
+		}
 	}
 	if (end && end < start) return null;
 	return {
@@ -165,6 +181,7 @@ export function normalizeTask(
 		task.duration && task.duration > 0
 			? new Date(start.getTime() + task.duration * 1000)
 			: null;
+	if (end && !Number.isFinite(end.getTime())) return null;
 	const occurrence = {
 		...base(task, "task", start, end),
 		done: task.done,
@@ -185,7 +202,10 @@ export function queryOccurrencesWithRaw(
 ): OccurrenceWithRaw[] {
 	if (query.from && query.to && query.from >= query.to) return [];
 	const evidence = input.events ?? [];
-	const covered = coveredRecurringSlots(evidence);
+	const covered = new Set([
+		...coveredRecurringSlots(evidence),
+		...excludedRecurringSlots(evidence),
+	]);
 	const events = filterEvents(evidence, { includeDeclined: true }).filter(
 		(e) => {
 			// A moved/deleted exception covers its original anchor, even when the
@@ -206,13 +226,14 @@ export function queryOccurrencesWithRaw(
 		query.from,
 		query.to,
 		evidence,
+		query.recurrenceWarnings,
 	);
 	const candidates: {
 		occurrence: Occurrence | null;
 		raw: Event | TimeSlot | Task;
 	}[] = [
 		...[...events, ...expanded].map((raw) => ({
-			occurrence: normalizeEvent(raw),
+			occurrence: normalizeEvent(raw, query.timezone),
 			raw,
 		})),
 		...(input.slots ?? []).map((raw) => ({
@@ -246,14 +267,17 @@ export function queryOccurrencesWithRaw(
 				return false;
 			if (
 				query.activeCalendarIds &&
-				(o.calendarId === null ||
-					!query.activeCalendarIds.includes(o.calendarId))
+				(o.calendarId === null
+					? o.source === "event"
+					: !query.activeCalendarIds.includes(o.calendarId))
 			)
 				return false;
 			if (
 				query.calendarId === undefined &&
 				query.calendarIds &&
-				(o.calendarId === null || !query.calendarIds.includes(o.calendarId))
+				(o.calendarId === null
+					? o.source === "event"
+					: !query.calendarIds.includes(o.calendarId))
 			)
 				return false;
 			if ((query.allDayOnly && !o.allDay) || (query.excludeAllDay && o.allDay))

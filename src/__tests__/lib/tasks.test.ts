@@ -12,6 +12,7 @@ import type { Task } from "../../lib/api/types";
 import {
 	readResource,
 	refreshResource,
+	snapshotResources,
 	upsertResourceRecords,
 } from "../../lib/cache";
 import { setAtomicWriteHook } from "../../lib/cache/atomic";
@@ -22,7 +23,11 @@ import {
 } from "../../lib/format/cleaned-types";
 import { cacheFile } from "../../lib/platform-config";
 import { resolveTaskId } from "../../lib/task-context";
-import { readTasks, recordTaskIntent } from "../../lib/tasks";
+import {
+	overlayPendingTasks,
+	readTasks,
+	recordTaskIntent,
+} from "../../lib/tasks";
 import fixtures from "../integration/fixtures/tasks.json";
 
 const id = "11111111-2222-4333-8444-555555555555";
@@ -316,4 +321,114 @@ describe("unified task repository", () => {
 			existsSync(join(import.meta.dir, "../../lib/tasks-local-cache.ts")),
 		).toBe(false);
 	});
+});
+
+test("pinned pending overlays use supplied observations without rewriting their journal", async () => {
+	await upsertResourceRecords("tasks", [fixture()]);
+	await recordTaskIntent("update", { id, title: "Pending" });
+	const original = readFileSync(cacheFile("pending-tasks.json"), "utf8");
+	expect(
+		overlayPendingTasks([fixture({ title: "Pending" })])[0]?.pending,
+	).toBeUndefined();
+	expect(
+		overlayPendingTasks([fixture({ title: "Other generation" })])[0],
+	).toMatchObject({ title: "Pending", pending: true });
+	expect(readFileSync(cacheFile("pending-tasks.json"), "utf8")).toBe(original);
+});
+
+for (const kind of ["plan", "complete"] as const) {
+	test(`a later explicit tombstone retires pending ${kind} without resurrection`, async () => {
+		await upsertResourceRecords("tasks", [fixture()]);
+		await recordTaskIntent(kind, {
+			id,
+			status: 2,
+			...(kind === "complete" ? { done: true } : { date: "2026-06-23" }),
+		});
+		const intents = journal();
+		intents[0].createdAt = "2026-01-02T00:00:00Z";
+		writeFileSync(
+			cacheFile("pending-tasks.json"),
+			JSON.stringify({ version: 1, intents }),
+		);
+		await refreshResource(
+			{
+				get: async () => ({
+					success: true,
+					message: null,
+					data: [{ id, status: 9, deleted_at: "2026-01-03T00:00:00Z" }],
+					sync_token: "deleted",
+				}),
+			} as never,
+			"tasks",
+		);
+		const snapshot = await snapshotResources(offline, ["tasks"]);
+		const before = readFileSync(cacheFile("pending-tasks.json"), "utf8");
+		expect(snapshot.deletedTasks[id]).toBeTruthy();
+		expect(
+			overlayPendingTasks(snapshot.data.tasks, {
+				deletedTasks: snapshot.deletedTasks,
+			}),
+		).toEqual([]);
+		expect(readFileSync(cacheFile("pending-tasks.json"), "utf8")).toBe(before);
+		expect(await readTasks()).toEqual([]);
+		expect(journal()).toHaveLength(0);
+	});
+}
+
+test("an older tombstone never cancels a newer create", async () => {
+	await refreshResource(
+		{
+			get: async () => ({
+				success: true,
+				message: null,
+				data: [{ id, status: 9, deleted_at: "2026-01-03T00:00:00Z" }],
+				sync_token: "deleted",
+			}),
+		} as never,
+		"tasks",
+	);
+	await recordTaskIntent("create", { id, title: "New intent" });
+	const intents = journal();
+	intents[0].createdAt = "2099-01-01T00:00:00Z";
+	writeFileSync(
+		cacheFile("pending-tasks.json"),
+		JSON.stringify({ version: 1, intents }),
+	);
+	const snapshot = await snapshotResources(offline, ["tasks"]);
+	expect(
+		overlayPendingTasks(snapshot.data.tasks, {
+			deletedTasks: snapshot.deletedTasks,
+		})[0],
+	).toMatchObject({ id, title: "New intent", pending: true });
+	expect((await readTasks())[0]).toMatchObject({
+		id,
+		title: "New intent",
+		pending: true,
+	});
+	expect(journal()).toHaveLength(1);
+});
+
+test("pinned overlays preserve conflict diagnostics without journal writes", async () => {
+	await upsertResourceRecords("tasks", [fixture()]);
+	await recordTaskIntent("complete", { id, done: true, status: 2 });
+	const original = readFileSync(cacheFile("pending-tasks.json"), "utf8");
+	const overlay = overlayPendingTasks([
+		fixture({ global_updated_at: "2026-03-01T00:00:00Z" }),
+	]);
+	expect(overlay[0]?.pending_conflict).toContain(
+		"conflicts with unacknowledged intent",
+	);
+	expect(readFileSync(cacheFile("pending-tasks.json"), "utf8")).toBe(original);
+});
+
+test("pending planning never unhides status-only observed trash", async () => {
+	await upsertResourceRecords("tasks", [fixture()]);
+	await recordTaskIntent("plan", { id, status: 2, date: "2026-06-23" });
+	const trashed = fixture({ status: 10, trashed_at: null });
+	expect(overlayPendingTasks([trashed])).toEqual([]);
+	await upsertResourceRecords("tasks", [trashed]);
+	expect(await readTasks()).toEqual([]);
+	expect((await readTasks(offline, { includeTrashed: true }))[0]?.status).toBe(
+		10,
+	);
 });

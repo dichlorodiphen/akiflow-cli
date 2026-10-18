@@ -68,3 +68,25 @@ test("envelope opt-in honors explicit negation and ignores positional flag-shape
 	});
 	expect(outputMode(["--envelope=false"], "1").enabled).toBe(false);
 });
+
+test("output mode honors final boolean spellings for every JSON source", () => {
+	expect(outputMode(["--envelope", "--json", "--no-json"], "0")).toEqual({
+		enabled: true,
+		requestedJson: false,
+	});
+	expect(
+		outputMode(["--raw", "--raw=false", "--json=false"], "0").requestedJson,
+	).toBe(false);
+	expect(outputMode(["--raw", "--no-json"], "0").requestedJson).toBe(true);
+	expect(outputMode(["--no-envelope=false"], "0").enabled).toBe(true);
+});
+
+test("API timeouts retain the upstream exit contract", () => {
+	expect(
+		classifyExit(
+			1,
+			["Error: API request timed out after 50ms: GET /v5/events"],
+			[],
+		),
+	).toBe(EXIT_CODES.upstream);
+});

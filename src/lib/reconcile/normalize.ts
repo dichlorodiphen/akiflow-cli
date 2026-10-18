@@ -1,7 +1,11 @@
 import type { Calendar, Event } from "../api/types";
 import { resolveCalendarFromList } from "../calendar";
 import { filterEvents } from "../filters/event";
-import { expandRecurringEvents } from "../recurrence-expansion";
+import {
+	coveredRecurringSlots,
+	excludedRecurringSlots,
+	isRecurringEventMaster,
+} from "../recurrence-expansion";
 import { parseCalendarDate, validateTimezone } from "../timezone";
 import type { GoogleEvent, GoogleObservation } from "./google-reader";
 import {
@@ -155,17 +159,23 @@ export function normalizeAkiflow(
 		(event) =>
 			!event.id.startsWith("virtual:") || event.recurring_id !== event.id,
 	);
-	const expanded = [
-		...events,
-		...expandRecurringEvents(
-			events,
-			new Date(window.start),
-			new Date(window.end),
-			evidence,
-		),
-	];
+	// Reconciliation compares observed records only. RRULE predictions must never
+	// establish fresh-server or pinned-cache presence for an unobserved instance.
+	const expanded = events.filter((event) => !event.id.startsWith("virtual:"));
+	const covered = new Set([
+		...coveredRecurringSlots(evidence),
+		...excludedRecurringSlots(evidence),
+	]);
 	const visible = new Set(
-		filterEvents(expanded, { includeDeclined: true }).map((event) => event.id),
+		filterEvents(expanded, { includeDeclined: true })
+			.filter((event) => {
+				if (!isRecurringEventMaster(event)) return true;
+				const anchor = event.start_time
+					? instant(event.start_time)
+					: event.start_date;
+				return !covered.has(`${event.id}|${anchor}`);
+			})
+			.map((event) => event.id),
 	);
 	const byId = new Map(calendars.map((calendar) => [calendar.id, calendar]));
 	const masters = new Map(freshMasters.map((event) => [event.id, event]));

@@ -127,3 +127,73 @@ describe("task mutation repository write-through", () => {
 			);
 		});
 });
+
+test("rejected task creates never appear as pending local tasks", async () => {
+	fetchSpy.mockImplementation((async (
+		_input: Parameters<typeof fetch>[0],
+		init?: RequestInit,
+	) => {
+		const payload = JSON.parse(init?.body as string)[0];
+		return new Response(
+			JSON.stringify({
+				success: true,
+				data: [],
+				failed: [{ id: payload.id, error: "Rejected" }],
+			}),
+		);
+	}) as typeof fetch);
+	const previousExit = process.exitCode;
+	try {
+		await createTaskCommand.run!({
+			args: { title: "Rejected phantom", _: [], json: true },
+			rawArgs: [],
+		} as any);
+		expect(
+			(await readTasks()).some((task) => task.title === "Rejected phantom"),
+		).toBe(false);
+		const envelope = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+		expect(envelope.receipts[0].status).toBe("failed");
+	} finally {
+		process.exitCode = previousExit ?? 0;
+	}
+});
+
+test("a date-only plan preserves a previous unobserved time change", async () => {
+	await taskPlanCommand.run!({
+		args: { id, date: "2026-05-22", at: "15:00", timezone: "UTC", _: [] },
+		rawArgs: [],
+	} as any);
+	await taskPlanCommand.run!({
+		args: { id, date: "2026-05-23", _: [] },
+		rawArgs: [],
+	} as any);
+	const observed = (await readTasks()).find((task) => task.id === id);
+	expect(observed?.datetime).toBe("2026-05-23T15:00:00.000Z");
+	expect(observed?.datetime_tz).toBe("UTC");
+});
+
+test("date-only planning retains seconds and milliseconds", async () => {
+	await upsertResourceRecords("tasks", [
+		{ ...base, datetime: "2026-05-21T09:00:38.123Z" },
+	]);
+	await taskPlanCommand.run!({
+		args: { id, date: "2026-05-22", _: [] },
+		rawArgs: [],
+	} as any);
+	expect((await readTasks()).find((task) => task.id === id)?.datetime).toBe(
+		"2026-05-22T09:00:38.123Z",
+	);
+});
+
+test("multi-day hour snoozes advance date-only tasks by the rounded-up duration", async () => {
+	await upsertResourceRecords("tasks", [
+		{ ...base, datetime: null, datetime_tz: null },
+	]);
+	await taskSnoozeCommand.run!({
+		args: { id, duration: "49h", _: [] },
+		rawArgs: [],
+	} as any);
+	expect((await readTasks()).find((task) => task.id === id)?.date).toBe(
+		"2026-05-24",
+	);
+});

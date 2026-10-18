@@ -57,8 +57,8 @@ export type TaskState = "inbox" | "planned" | "done" | "trashed" | "deleted";
 export function taskStateOf(
 	task: Pick<Task, "status" | "done" | "trashed_at" | "deleted_at">,
 ): TaskState {
-	if (task.deleted_at != null) return "deleted";
-	if (task.trashed_at != null) return "trashed";
+	if (task.deleted_at != null || task.status === 9) return "deleted";
+	if (task.trashed_at != null || task.status === 10) return "trashed";
 	if (task.done) return "done";
 	if (task.status === 1) return "inbox";
 	return "planned";

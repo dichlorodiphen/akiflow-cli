@@ -36,17 +36,13 @@ import {
 	mutationReader,
 	previewItem,
 	printDryRun,
+	snapshotArgs,
 } from "../lib/dry-run";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { recordCreatedEvent } from "../lib/event-creation-journal";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
 import { previewOccurrences, validateRRule } from "../lib/recurrence";
-import {
-	assertMutableTaskId,
-	isSyntheticTaskId,
-	readTaskContext,
-	resolveTaskId,
-} from "../lib/task-context";
+import { readTaskContext, resolveTaskId } from "../lib/task-context";
 import {
 	printTaskMutation,
 	type TaskOutcome,
@@ -427,7 +423,14 @@ export const createTaskCommand = defineCommand({
 				args.verify === true,
 			);
 			const createdTask = response.data[0] ?? undefined;
-			await recordTaskIntent("create", task, createdTask);
+			if (
+				outcome.receipts.some(
+					(receipt) =>
+						receipt.id === task.id &&
+						["accepted", "verified"].includes(receipt.status),
+				)
+			)
+				await recordTaskIntent("create", task, createdTask);
 			printTaskMutation(
 				"task create",
 				args.json === true,
@@ -452,6 +455,7 @@ export const createSlotCommand = defineCommand({
 	},
 	args: {
 		...dryRunArgs,
+		...snapshotArgs,
 		verify: verifyFlag,
 		title: {
 			type: "positional",
@@ -506,13 +510,24 @@ export const createSlotCommand = defineCommand({
 	run: async (context) => {
 		const client = createClient();
 		const args = context.args as Record<string, unknown>;
-		const existingTaskIds = stringValues(args["task-id"]);
-		for (const taskId of existingTaskIds) {
-			if (isSyntheticTaskId(taskId)) {
-				console.error(`Error: Synthetic task ID "${taskId}" cannot be mutated`);
-				process.exit(2);
-			}
-		}
+		const existingTaskIds = [
+			...new Set(
+				stringValues(args["task-id"]).map((identifier) => {
+					try {
+						const id = resolveTaskId(identifier, readTaskContext(), {
+							snapshot: args.snapshot as string | undefined,
+						});
+						if (id) return id;
+						throw new Error(`Could not resolve task ID "${identifier}"`);
+					} catch (error) {
+						console.error(
+							`Error: ${error instanceof Error ? error.message : String(error)}`,
+						);
+						return process.exit(2);
+					}
+				}),
+			),
+		];
 		const title = args.title as string;
 		const date = resolveDate(args);
 		const at = args.at as string;
@@ -527,6 +542,10 @@ export const createSlotCommand = defineCommand({
 		}
 
 		const durationSeconds = parseDurationToSeconds(durationInput);
+		if (durationSeconds <= 0) {
+			console.error("Error: Duration must be greater than zero");
+			process.exit(2);
+		}
 		const startTime = resolveTime(date, at, timezone, fold);
 		const endTime = new Date(
 			new Date(startTime).getTime() + durationSeconds * 1000,
@@ -783,6 +802,10 @@ export const createEventCommand = defineCommand({
 		}
 
 		const durationSeconds = parseDurationToSeconds(durationInput);
+		if (durationSeconds <= 0) {
+			console.error("Error: Duration must be greater than zero");
+			process.exit(2);
+		}
 		const startTime = resolveTime(date, at, timezone, fold);
 		const endTime = new Date(
 			new Date(startTime).getTime() + durationSeconds * 1000,
@@ -844,7 +867,7 @@ export const createEventCommand = defineCommand({
 		// known at submit time. Record on accepted so `af event delete`
 		// can distinguish CLI-created events from foreign ones.
 		if (receipt && receipt.status === "accepted") {
-			recordCreatedEvent({
+			await recordCreatedEvent({
 				event_id: operation.event_id,
 				created_at: new Date().toISOString(),
 				provenance: {

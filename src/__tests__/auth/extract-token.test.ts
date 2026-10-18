@@ -1,8 +1,23 @@
 /// <reference types="bun" />
 
 import { Database } from "bun:sqlite";
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	spyOn,
+} from "bun:test";
+import {
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,9 +25,63 @@ import {
 	deriveKey,
 	type ExtractedToken,
 	extractFromBrowser,
+	extractFromChrome,
+	extractFromIndexedDB,
+	extractFromSafari,
 	getKeychainPassword,
 	scanBrowsers,
 } from "../../lib/auth/extract-token";
+import * as browserPaths from "../../lib/browser-paths";
+
+// Browser auth tests must never inspect the host's browser profiles or Keychain.
+let fixtureRoot: string;
+const originalSpawn = Bun.spawn;
+let spawnSpy: ReturnType<typeof spyOn>;
+let pathsSpy: ReturnType<typeof spyOn>;
+beforeAll(() => {
+	fixtureRoot = mkdtempSync(join(tmpdir(), "af-browser-isolation-"));
+	writeFileSync(
+		join(fixtureRoot, "security"),
+		"#!/bin/sh\nprintf '%s\\n' 'fixture-safe-storage'\n",
+		{ mode: 0o700 },
+	);
+});
+beforeEach(() => {
+	spawnSpy = spyOn(Bun, "spawn").mockImplementation(((
+		command: unknown,
+		options?: unknown,
+	) => {
+		if (!Array.isArray(command) || command[0] !== "security")
+			throw new Error("Unexpected browser-test subprocess");
+		return Reflect.apply(originalSpawn, Bun, [
+			[join(fixtureRoot, "security"), ...command.slice(1)],
+			options,
+		]);
+	}) as typeof Bun.spawn);
+	pathsSpy = spyOn(browserPaths, "getAllBrowserPaths").mockReturnValue([
+		{
+			id: "chrome",
+			name: "Fixture Chrome",
+			cookiePath: join(fixtureRoot, "missing"),
+			indexedDBPath: join(fixtureRoot, "IndexedDB"),
+			encryptionMethod: "pbkdf2",
+		},
+		{
+			id: "safari",
+			name: "Fixture Safari",
+			cookiePath: join(fixtureRoot, "missing-safari"),
+			indexedDBPath: null,
+			encryptionMethod: "binary",
+		},
+	]);
+});
+afterEach(() => {
+	pathsSpy.mockRestore();
+	spawnSpy.mockRestore();
+});
+afterAll(() => {
+	rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 describe("deriveKey", () => {
 	it("derives 16-byte key from password using PBKDF2", async () => {
@@ -54,6 +123,43 @@ describe("deriveKey", () => {
 });
 
 describe("decryptChromeValue", () => {
+	it("round-trips Chrome AES-CBC plaintext without removing padding twice", async () => {
+		const key = await deriveKey("fixture-safe-storage");
+		const cryptoKey = await crypto.subtle.importKey(
+			"raw",
+			Uint8Array.from(key),
+			"AES-CBC",
+			false,
+			["encrypt"],
+		);
+		for (const plaintext of [
+			"session-jwt-value",
+			"value-ending-in-1",
+			"value-ending-in-} ",
+		]) {
+			const encrypted = new Uint8Array(
+				await crypto.subtle.encrypt(
+					{ name: "AES-CBC", iv: new Uint8Array(16).fill(0x20) },
+					cryptoKey,
+					new TextEncoder().encode(plaintext),
+				),
+			);
+			const chromeValue = new Uint8Array(3 + encrypted.length);
+			chromeValue.set(new TextEncoder().encode("v10"));
+			chromeValue.set(encrypted, 3);
+			expect(await decryptChromeValue(chromeValue, key)).toBe(plaintext);
+		}
+	});
+
+	it("returns null for corrupt ciphertext instead of aborting browser scans", async () => {
+		expect(
+			await decryptChromeValue(
+				new TextEncoder().encode("v10broken"),
+				await deriveKey("fixture"),
+			),
+		).toBeNull();
+	});
+
 	it("returns original string for non-encrypted values", async () => {
 		// given
 		const plainValue = new TextEncoder().encode("plaintext");
@@ -103,7 +209,7 @@ describe("getKeychainPassword", () => {
 		expect(result).toBeNull();
 	});
 
-	it("returns string or null for chrome", async () => {
+	it("uses a fixture Keychain helper for chrome", async () => {
 		// given
 		const browser = "chrome";
 
@@ -111,7 +217,7 @@ describe("getKeychainPassword", () => {
 		const result = await getKeychainPassword(browser);
 
 		// then
-		expect(result === null || typeof result === "string").toBe(true);
+		expect(result).toBe("fixture-safe-storage");
 	});
 });
 
@@ -194,6 +300,32 @@ describe("extractFromBrowser", () => {
 	});
 });
 
+describe("IndexedDB rotating files", () => {
+	it("continues past vanished files to find other session tokens", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "af-indexeddb-fixture-"));
+		try {
+			const database = join(
+				directory,
+				"https_web.akiflow.com_0.indexeddb.leveldb",
+			);
+			mkdirSync(database);
+			symlinkSync(join(directory, "missing"), join(database, "000001.ldb"));
+			const jwt = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ exp: 4102444800 })).toString("base64url")}.fixtureSignature`;
+			writeFileSync(join(database, "000002.log"), jwt);
+			const result = await extractFromIndexedDB({
+				id: "chrome",
+				name: "Fixture",
+				cookiePath: join(directory, "unused"),
+				indexedDBPath: directory,
+				encryptionMethod: "pbkdf2",
+			});
+			expect(result.map((value) => value.token)).toEqual([jwt]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("ExtractedToken interface", () => {
 	it("has correct structure", () => {
 		// given
@@ -255,6 +387,39 @@ describe("Chrome SQLite mock", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
+	it("imports only Akiflow domain cookies and continues after corrupt encryption", async () => {
+		const jwt = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ exp: 4102444800 })).toString("base64url")}.fixtureSignature`;
+		const db = new Database(mockDbPath);
+		db.run("INSERT INTO cookies VALUES (?, ?, ?, ?)", [
+			".akiflow.com",
+			"remember_web_broken",
+			"",
+			new TextEncoder().encode("v10broken"),
+		]);
+		db.run("INSERT INTO cookies VALUES (?, ?, ?, NULL)", [
+			"evilakiflow.com",
+			"remember_web_wrong",
+			jwt,
+		]);
+		db.run("INSERT INTO cookies VALUES (?, ?, ?, NULL)", [
+			".web.akiflow.com",
+			"remember_web_valid",
+			jwt,
+		]);
+		db.close();
+		const result = await extractFromChrome({
+			id: "chrome",
+			name: "Fixture",
+			cookiePath: mockDbPath,
+			indexedDBPath: null,
+			encryptionMethod: "pbkdf2",
+		});
+		expect(result.map((value) => value.token)).toEqual([jwt]);
+		const cleanup = new Database(mockDbPath);
+		cleanup.run("DELETE FROM cookies WHERE name != 'remember_web_test'");
+		cleanup.close();
+	});
+
 	it("creates valid SQLite database with cookies table", () => {
 		// given
 		const db = new Database(mockDbPath, { readonly: true });
@@ -288,6 +453,50 @@ describe("Safari binary cookies mock", () => {
 
 	afterAll(() => {
 		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("imports a valid cookie but ignores lookalike domains", async () => {
+		const jwt = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ exp: 4102444800 })).toString("base64url")}.fixtureSignature`;
+		const path = join(tempDir, "domains");
+		const browser = {
+			id: "safari" as const,
+			name: "Fixture",
+			cookiePath: path,
+			indexedDBPath: null,
+			encryptionMethod: "binary" as const,
+		};
+		writeFileSync(
+			path,
+			createMockSafariCookie(".akiflow.com", "remember_web_a", jwt),
+		);
+		expect(
+			(await extractFromSafari(browser)).map((value) => value.token),
+		).toEqual([jwt]);
+		writeFileSync(
+			path,
+			createMockSafariCookie("evilakiflow.com", "remember_web_a", jwt),
+		);
+		expect(await extractFromSafari(browser)).toEqual([]);
+	});
+
+	it("rejects truncated headers and invalid cookie string offsets without throwing", async () => {
+		const path = join(tempDir, "malformed");
+		const browser = {
+			id: "safari" as const,
+			name: "Fixture",
+			cookiePath: path,
+			indexedDBPath: null,
+			encryptionMethod: "binary" as const,
+		};
+		for (const buffer of [
+			Buffer.from("cook"),
+			Buffer.from("cook\x00\x00\x00\xff"),
+			createMockSafariCookie(".akiflow.com", "remember_web_a", "value"),
+		]) {
+			if (buffer.length > 24) buffer.writeUInt32LE(0xffffffff, 24);
+			writeFileSync(path, buffer);
+			expect(await extractFromSafari(browser)).toEqual([]);
+		}
 	});
 
 	it("creates valid binary cookie file with cook magic", async () => {
@@ -372,7 +581,7 @@ function createMockSafariCookie(
 	const pageBuffer = Buffer.alloc(pageSize);
 	pageBuffer.writeUInt32LE(0x00000100, 0);
 	pageBuffer.writeUInt32LE(1, 4);
-	pageBuffer.writeUInt32LE(8, 8);
+	pageBuffer.writeUInt32LE(12, 8);
 	cookieBuffer.copy(pageBuffer, 12);
 
 	const headerSize = 8 + 4;

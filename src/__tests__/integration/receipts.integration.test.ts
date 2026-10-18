@@ -133,7 +133,7 @@ describe("truthful receipts (BDD)", () => {
 		expect(result.stdout + result.stderr).toMatch(/read.only/i);
 		expect(posts()).toHaveLength(0);
 	});
-	test("back-to-back updates use the first observed change as second base", async () => {
+	test("back-to-back field patches retain unrelated prior changes", async () => {
 		expect(
 			(await run(["event", "update", "event-meeting-1", "--title", "First"]))
 				.exitCode,
@@ -150,8 +150,12 @@ describe("truthful receipts (BDD)", () => {
 			).exitCode,
 		).toBe(0);
 		const operation = JSON.parse(posts()[1]?.body ?? "[]")[0];
-		expect(operation.payload.base.title).toBe("First");
-		expect(operation.payload.changes.title).toBe("First");
+		expect(Object.keys(operation.payload.base)).toEqual(["description"]);
+		expect(operation.payload.changes).toEqual({ description: "Second" });
+		expect(operation.payload.base).not.toHaveProperty("title");
+		expect(
+			lifecycle.records.find((record) => record.id === "event-meeting-1"),
+		).toMatchObject({ title: "First", description: "Second" });
 	});
 	test("batch mixed outcomes preserve failed versus unknown and submit once", async () => {
 		const first = lifecycle.records[0];

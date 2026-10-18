@@ -3,7 +3,6 @@ import { createClient } from "../lib/api/client";
 import { auditDiscrepancies, auditStatusCounts } from "../lib/audit";
 import { occurrenceReadArgs, readOccurrences } from "../lib/occurrence-read";
 import { buildReviewEnvelope } from "../lib/review-envelope";
-import { readTasks } from "../lib/tasks";
 import { readFailure } from "./cal";
 
 export const auditCommand = defineCommand({
@@ -15,16 +14,16 @@ export const auditCommand = defineCommand({
 	run: async ({ args }) => {
 		try {
 			const client = createClient();
-			const { snapshot, input, query, pairs, window, minMinutes } =
-				await readOccurrences(client, args);
-			// Status diagnostics need retained trash, even though the timeline excludes it.
-			const statusInput = {
-				...input,
-				tasks:
-					args.tasks === false
-						? []
-						: await readTasks(client, { includeTrashed: true }),
-			};
+			const {
+				snapshot,
+				input,
+				query,
+				pairs,
+				window,
+				minMinutes,
+				timezone,
+				recurrenceWarnings,
+			} = await readOccurrences(client, args);
 			const occurrences = pairs.map((p) => p.occurrence);
 			const fetch_times = Object.fromEntries(
 				(["events", "time_slots", "tasks", "calendars"] as const).map(
@@ -35,10 +34,17 @@ export const auditCommand = defineCommand({
 			const observed_at = times.every((t) => t !== null)
 				? [...(times as string[])].sort()[0]!
 				: null;
-			const envelope = buildReviewEnvelope(occurrences, window, minMinutes, {
-				generation: snapshot.generation,
-				observed_at,
-			});
+			const envelope = buildReviewEnvelope(
+				occurrences,
+				window,
+				minMinutes,
+				{
+					generation: snapshot.generation,
+					observed_at,
+				},
+				timezone,
+			);
+			envelope.warnings.push(...recurrenceWarnings);
 			const counts = { event: 0, slot: 0, task: 0 };
 			for (const o of occurrences) counts[o.source]++;
 			const audit = {
@@ -66,7 +72,7 @@ export const auditCommand = defineCommand({
 				},
 				discrepancies: {
 					...auditDiscrepancies(occurrences),
-					statuses: auditStatusCounts(statusInput, query, occurrences),
+					statuses: auditStatusCounts(input, query, occurrences),
 				},
 				effective: envelope.occurrences,
 			};

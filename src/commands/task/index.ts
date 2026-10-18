@@ -335,17 +335,9 @@ export const taskPlanCommand = defineCommand({
 		// current task. Try the local cache first (without exiting if missing),
 		// then fall back to the server.
 		let existingTask: import("../../lib/api/types").Task | null = null;
-		try {
-			const { cacheFile } = await import("../../lib/platform-config");
-			const { readAllRecords } = await import("../../lib/cache/jsonl-store");
-			const tasks = await readAllRecords<import("../../lib/api/types").Task>(
-				cacheFile("tasks.jsonl"),
-			);
-			existingTask = tasks.find((t) => t.id === taskId) ?? null;
-		} catch {
-			// Cache read failed; try server below.
-		}
-		if (!existingTask) {
+		const localTasks = await readTasks(client);
+		existingTask = localTasks.find((task) => task.id === taskId) ?? null;
+		if (!existingTask && !context.args["dry-run"]) {
 			try {
 				const tasksResponse = await client.getTasks();
 				if (tasksResponse.success && tasksResponse.data) {
@@ -417,6 +409,12 @@ export const taskPlanCommand = defineCommand({
 					timezone,
 					fold,
 				);
+				const instant = new Date(existingTask.datetime);
+				updatePayload.datetime = new Date(
+					Date.parse(updatePayload.datetime) +
+						instant.getUTCSeconds() * 1000 +
+						instant.getUTCMilliseconds(),
+				).toISOString();
 				updatePayload.datetime_tz = timezone;
 			}
 			// If the task has no datetime and no --at, it's date-only; just set date.
@@ -531,7 +529,7 @@ export const taskSnoozeCommand = defineCommand({
 		const client = createClient();
 		// D: Task reads are local via unified repository; fallback to server if cache empty.
 		let allTasks = await readTasks(client);
-		if (allTasks.length === 0) {
+		if (allTasks.length === 0 && !context.args["dry-run"]) {
 			// Cache not initialized (e.g., F tests); fall back to server GET.
 			const serverResponse = await client.getTasks();
 			if (serverResponse.success && serverResponse.data) {
@@ -599,7 +597,7 @@ export const taskSnoozeCommand = defineCommand({
 				let days: number;
 				if (durationUnit === "m" || durationUnit === "h") {
 					// Sub-day snooze on a date-only task: move to next day (can't represent time).
-					days = 1;
+					days = Math.ceil(snoozeMillis / 86400000);
 				} else {
 					days = durationUnit === "d" ? durationValue : durationValue * 7;
 				}

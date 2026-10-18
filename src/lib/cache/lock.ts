@@ -40,12 +40,23 @@ function loadNative() {
 }
 let native: ReturnType<typeof loadNative> | undefined;
 
-async function guarded<T>(lockPath: string, fn: () => T): Promise<T> {
+async function guarded<T>(
+	lockPath: string,
+	fn: () => T,
+	deadline = Date.now() + acquireTimeoutMs(),
+): Promise<T> {
 	native ??= loadNative();
 	const fd = openSync(`${lockPath}.reclaim`, "a", 0o600);
 	try {
 		// LOCK_EX | LOCK_NB; waiting must not block the Bun event loop.
-		while (native.symbols.flock(fd, 2 | 4) !== 0) await Bun.sleep(10);
+		while (native.symbols.flock(fd, 2 | 4) !== 0) {
+			if (Date.now() >= deadline) {
+				throw new Error(
+					`could not acquire reclamation guard for ${lockPath} before lock timeout`,
+				);
+			}
+			await Bun.sleep(10);
+		}
 		return fn();
 	} finally {
 		// close releases the kernel lock, including when the process is killed.
@@ -116,38 +127,42 @@ async function acquire(lockPath: string): Promise<HeldLock> {
 	const deadline = Date.now() + timeoutMs;
 	let holderPid: number | undefined;
 	for (;;) {
-		const acquired = await guarded(lockPath, () => {
-			try {
-				const fd = openSync(lockPath, "wx", 0o600);
-				const owner = {
-					pid: process.pid,
-					nonce: randomUUID(),
-					timestamp: Date.now(),
-				};
+		const acquired = await guarded(
+			lockPath,
+			() => {
 				try {
-					writeSync(fd, JSON.stringify(owner), 0, "utf8");
+					const fd = openSync(lockPath, "wx", 0o600);
+					const owner = {
+						pid: process.pid,
+						nonce: randomUUID(),
+						timestamp: Date.now(),
+					};
+					try {
+						writeSync(fd, JSON.stringify(owner), 0, "utf8");
+					} catch (err) {
+						closeSync(fd);
+						throw err;
+					}
+					return { fd, owner };
 				} catch (err) {
-					closeSync(fd);
-					throw err;
+					if (!isCode(err, "EEXIST")) throw err;
+					try {
+						const contents = readFileSync(lockPath, "utf8");
+						const owner = parseOwner(contents);
+						if (owner) holderPid = owner.pid;
+						const stale = owner
+							? !isAlive(owner.pid)
+							: Date.now() - statSync(lockPath).mtimeMs > STALE_AFTER_MS;
+						if (stale && readFileSync(lockPath, "utf8") === contents)
+							unlinkSync(lockPath);
+					} catch (err) {
+						if (!isCode(err, "ENOENT")) throw err;
+					}
+					return undefined;
 				}
-				return { fd, owner };
-			} catch (err) {
-				if (!isCode(err, "EEXIST")) throw err;
-				try {
-					const contents = readFileSync(lockPath, "utf8");
-					const owner = parseOwner(contents);
-					if (owner) holderPid = owner.pid;
-					const stale = owner
-						? !isAlive(owner.pid)
-						: Date.now() - statSync(lockPath).mtimeMs > STALE_AFTER_MS;
-					if (stale && readFileSync(lockPath, "utf8") === contents)
-						unlinkSync(lockPath);
-				} catch (err) {
-					if (!isCode(err, "ENOENT")) throw err;
-				}
-				return undefined;
-			}
-		});
+			},
+			deadline,
+		);
 		if (acquired) return acquired;
 		if (Date.now() >= deadline) {
 			throw new Error(

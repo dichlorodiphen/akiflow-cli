@@ -1,11 +1,10 @@
 import { parse } from "chrono-node";
 import { strictBoundarySelector, strictDaySelector } from "../date-selector";
 import {
-	DSTGapError,
+	calendarDayStartUtc as dayStart,
 	formatInTimezone,
 	parseCalendarDate,
 	validateTimezone,
-	zonedTimeToUtc,
 } from "../timezone";
 import { ReconcileError, type ReconcileWindow, type RecordTime } from "./types";
 
@@ -26,24 +25,15 @@ export function addCalendarDays(date: string, days: number): string {
 
 /** A DST change can skip midnight itself; use the civil day's first instant. */
 export function calendarDayStartUtc(date: string, timezone: string): string {
-	for (let minute = 0; minute < 1440; minute++) {
-		try {
-			return zonedTimeToUtc(
-				date,
-				Math.floor(minute / 60),
-				minute % 60,
-				timezone,
-				"first",
-			);
-		} catch (error) {
-			if (!(error instanceof DSTGapError)) throw error;
-		}
+	try {
+		return dayStart(date, timezone);
+	} catch (error) {
+		throw new ReconcileError(
+			error instanceof Error ? error.message : String(error),
+			2,
+			"invalid_window",
+		);
 	}
-	throw new ReconcileError(
-		`Calendar day ${date} does not exist in ${timezone}`,
-		2,
-		"invalid_window",
-	);
 }
 
 /** Strict existing day vocabulary, with wall-clock inputs excluded in v1. */

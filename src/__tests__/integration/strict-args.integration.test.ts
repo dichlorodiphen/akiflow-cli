@@ -98,3 +98,48 @@ describe("validation before side effects", () => {
 		}
 	});
 });
+
+describe("validated dispatch semantics", () => {
+	test.each(
+		[
+			["--json=false"],
+			["--no-json", "--json", "--json=false"],
+			["--envelope", "--json", "--no-json"],
+		].map((flags) => ({ flags })),
+	)("inline false does not turn on JSON: %j", async ({ flags }) => {
+		const env = makeTestEnv("http://127.0.0.1:1");
+		try {
+			const result = await spawnCli(["task", "list", ...flags], {
+				env: { ...env.env, AF_JSON_ENVELOPE: "0" },
+			});
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout.trim().startsWith("{")).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+	test("last boolean spelling wins, including a positive after negation", async () => {
+		const env = makeTestEnv("http://127.0.0.1:1");
+		try {
+			const result = await spawnCli(["task", "list", "--no-json", "--json"], {
+				env: { ...env.env, AF_JSON_ENVELOPE: "0" },
+			});
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout).result).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
+	test("a help-shaped positional is validated as data, never global help", async () => {
+		const env = makeTestEnv("http://127.0.0.1:1");
+		try {
+			const result = await spawnCli(["completion", "--", "--help"], {
+				env: env.env,
+			});
+			expect(result.exitCode).toBe(2);
+			expect(result.stderr).toContain('Unknown shell "--help"');
+		} finally {
+			env.cleanup();
+		}
+	});
+});

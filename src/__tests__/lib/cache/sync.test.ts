@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -260,5 +266,64 @@ describe("syncResource — G semantics", () => {
 		expect(calls).toBe(2);
 		expect(result.finalToken).toBe("t-new");
 		expect(result.coldReplacement).toBe(true);
+	});
+});
+
+describe("syncResource — malformed pagination retains existing observations", () => {
+	for (const previousToken of [null, "old-token"]) {
+		for (const hasNext of [false, true]) {
+			test(`missing cursor rejects before publishing (previous=${previousToken}, next=${hasNext})`, async () => {
+				const file = join(dir, "test.jsonl");
+				const seed = '{"id":"original","n":1}\n';
+				writeFileSync(file, seed);
+				let calls = 0;
+				const client: ResourceClient = {
+					get: async <T>() => {
+						calls++;
+						return {
+							success: true,
+							message: null,
+							data: [] as T[],
+							has_next_page: hasNext,
+						};
+					},
+				};
+				await expect(
+					syncResource(client, {
+						resource: "test",
+						keyOf: (r: { id: string }) => r.id,
+						previousToken,
+					}),
+				).rejects.toThrow("no sync_token");
+				expect(calls).toBe(1);
+				expect(readFileSync(file, "utf8")).toBe(seed);
+			});
+		}
+	}
+	test("a delta cursor equal to the requested cursor cannot announce another page", async () => {
+		const client = fakeClient([
+			{ data: [], sync_token: "old", has_next_page: true },
+		]);
+		await expect(
+			syncResource<Rec>(client, {
+				resource: "test",
+				keyOf: (r) => r.id,
+				previousToken: "old",
+			}),
+		).rejects.toThrow("did not advance");
+	});
+	test("an unchanged terminal delta cursor remains valid when no changes exist", async () => {
+		const client = fakeClient([
+			{ data: [], sync_token: "old", has_next_page: false },
+		]);
+		expect(
+			(
+				await syncResource<Rec>(client, {
+					resource: "test",
+					keyOf: (r) => r.id,
+					previousToken: "old",
+				})
+			).finalToken,
+		).toBe("old");
 	});
 });

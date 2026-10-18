@@ -10,6 +10,7 @@ import {
 	eventTargetRejectionReason,
 	InvalidEventTargetError,
 	parseSendUpdates,
+	providerEventPayload,
 } from "../../lib/api/event-intents";
 import type { CreateEventPayload } from "../../lib/api/types";
 import { NetworkError } from "../../lib/api/types";
@@ -255,4 +256,13 @@ describe("event intents", () => {
 			}),
 		).toThrow(NetworkError);
 	});
+});
+
+it("keeps explicit location clearing in provider patch fields", () => {
+	expect(
+		providerEventPayload(createPayload({ content: { location: null } })),
+	).toHaveProperty("location", null);
+	expect(
+		providerEventPayload(createPayload({ content: {} })),
+	).not.toHaveProperty("location");
 });

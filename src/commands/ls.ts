@@ -88,14 +88,25 @@ function taskRecursOnDate(task: Task, date: Date): boolean {
 
 	try {
 		// recurrence can be string or string[] - normalize to string
-		const rruleString = Array.isArray(task.recurrence)
-			? task.recurrence[0]
+		let rruleString = Array.isArray(task.recurrence)
+			? task.recurrence.join("\n")
 			: task.recurrence;
 		if (!rruleString) return false;
 
-		const rule = rrulestr(rruleString, {
-			dtstart: getRecurrenceDtstart(task),
-		});
+		// rrulestr ignores its dtstart option in the RRuleSet path (EXDATE,
+		// RDATE or multiple rules), defaulting inclusion rules to "now". Put
+		// the stable task anchor in the recurrence text for every parse path.
+		if (!/^DTSTART[;:]/im.test(rruleString)) {
+			const anchor = getRecurrenceDtstart(task)
+				.toISOString()
+				.replace(/[-:]/g, "")
+				.replace(/\.\d{3}Z$/, "Z");
+			const body = rruleString.includes(":")
+				? rruleString
+				: `RRULE:${rruleString}`;
+			rruleString = `DTSTART:${anchor}\n${body}`;
+		}
+		const rule = rrulestr(rruleString);
 		return rule.between(start, end, true).length > 0;
 	} catch {
 		return false;
@@ -401,6 +412,10 @@ function buildExtendedFilter(args: Record<string, unknown>): TaskFilter {
 		f.status = (args.status as string)
 			.split(",")
 			.map((s) => s.trim()) as StatusName[];
+	} else if (args.all) {
+		f.status = ["all"];
+	} else if (args.done) {
+		f.status = ["done"];
 	} else {
 		const aliases: StatusName[] = [];
 		if (args.trashed) aliases.push("trashed");
@@ -439,7 +454,7 @@ function buildExtendedFilter(args: Record<string, unknown>): TaskFilter {
 	if (args.bucket) f.bucket = args.bucket as "week" | "month";
 	if (args.recurring) f.recurring = true;
 	if (args.planned) f.planned = true;
-	if (args.unplanned) f.unplanned = true;
+	if (args.unplanned || args.inbox) f.unplanned = true;
 
 	return f;
 }
@@ -554,7 +569,7 @@ export const taskListCommand = defineCommand({
 						args.trashed ||
 						String(args.status ?? "")
 							.split(",")
-							.some((s) => s === "all" || s === "trashed"),
+							.some((s) => s.trim() === "all" || s.trim() === "trashed"),
 				),
 			});
 
@@ -563,12 +578,32 @@ export const taskListCommand = defineCommand({
 					? addVirtualRecurringTasksForToday(tasks)
 					: tasks;
 
-			const filteredTasks = useExtended
+			let filteredTasks = useExtended
 				? applyExtendedFilters(
 						tasksWithVirtualRecurring,
 						extendedFilter,
 					).filter((task) => taskSearchMatches(task, options.search))
-				: filterTasks(tasksWithVirtualRecurring, options);
+				: filterTasks(tasksWithVirtualRecurring, {
+						...options,
+						project: undefined,
+					});
+
+			// Project and status aliases must survive the extended-filter path.
+			if (options.project) {
+				const project = options.project.toLowerCase();
+				const labels = await readResource(client, "labels", {
+					cacheOnly: true,
+				});
+				const matching = labels.filter(
+					(label) =>
+						!label.deleted_at && label.title.toLowerCase().includes(project),
+				);
+				filteredTasks = filteredTasks.filter(
+					(task) =>
+						(task.listId ?? "").toLowerCase().includes(project) ||
+						matching.some((label) => label.id === task.listId),
+				);
+			}
 
 			const listContext = await saveTaskContext(filteredTasks);
 			const meta = { snapshot: listContext.snapshot };

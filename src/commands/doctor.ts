@@ -28,6 +28,7 @@ interface DoctorReport {
 	};
 	browsers: BrowserReport[];
 	cache: {
+		error?: string;
 		path: string;
 		exists: boolean;
 		last_full_sync_at: string | null;
@@ -95,8 +96,14 @@ export async function runDoctor(opts: {
 			},
 			{
 				check: "cache",
-				severity: report.cache.exists ? "ok" : "warning",
-				message: report.cache.exists ? "cache present" : "cache missing",
+				severity: report.cache.error
+					? "critical"
+					: report.cache.exists
+						? "ok"
+						: "warning",
+				message:
+					report.cache.error ??
+					(report.cache.exists ? "cache present" : "cache missing"),
 				recovery: "af refresh --rebuild",
 			},
 			{
@@ -177,6 +184,20 @@ function checkBrowsers(): BrowserReport[] {
 }
 
 async function checkCache(): Promise<DoctorReport["cache"]> {
+	try {
+		return await inspectCache();
+	} catch (error) {
+		return {
+			path: cachePath(),
+			exists: existsSync(cachePath()),
+			last_full_sync_at: null,
+			resources: {},
+			error: `cache unreadable: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+}
+
+async function inspectCache(): Promise<DoctorReport["cache"]> {
 	const path = cachePath();
 	const exists = existsSync(path);
 	const tokens = exists ? await readTokens() : {};
@@ -251,6 +272,7 @@ function printReport(r: DoctorReport): void {
 	line(
 		`  ${r.cache.path.padEnd(30)}    ${r.cache.exists ? "✓ exists" : "✗ MISSING"}`,
 	);
+	if (r.cache.error) line(`  ${r.cache.error}. Recovery: af refresh --rebuild`);
 	if (r.cache.last_full_sync_at)
 		line(`  Last full sync                    ${r.cache.last_full_sync_at}`);
 	for (const [res, info] of Object.entries(r.cache.resources)) {

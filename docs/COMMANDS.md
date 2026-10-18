@@ -65,7 +65,7 @@ Short IDs come from the last `af task list` (including JSON/raw output), against
 
 All task consumers (`task list`, `cal`, `convert`, `slot`, and project counts) use one local repository. Observations come from a pinned cache generation; task reads do not fetch from the API. Run `af refresh` or `af cache refresh` to obtain fresh observations. List metadata resolution and project counts also use local cache data.
 
-Successful task writes are stored as explicit intents in `$AF_CACHE_DIR/pending-tasks.json` (default `~/.cache/af`), atomically under the cache ownership lock. Create/update/plan/snooze/complete/delete, slot task changes, and conversion source deletions immediately affect the next local read. JSON/raw task rows and cleaned calendar task entries include `pending: true`; plain list/calendar/slot/conversion output shows `[pending]`. Conversion JSON items carry the same marker, and project/slot counts annotate the number of pending tasks. Observed-only rows omit that field. Snoozing a timed task moves both its date and scheduled time. Planning with a date and no time clears any previous timed schedule; calendar only displays timed tasks.
+Successful task writes are stored as explicit intents in `$AF_CACHE_DIR/pending-tasks.json` (default `~/.cache/af`), atomically under the cache ownership lock. Create/update/plan/snooze/complete/delete, slot task changes, and conversion source deletions immediately affect the next local read. JSON/raw task rows and cleaned calendar task entries include `pending: true`; plain list/calendar/slot/conversion output shows `[pending]`. Conversion JSON items carry the same marker, and project/slot counts annotate the number of pending tasks. Observed-only rows omit that field. Snoozing a timed task moves both its date and scheduled time. Planning with a date and no time preserves the existing wall time; use --clear-time for date-only. Calendar displays timed tasks.
 
 Intents never expire by age. The repository applies them in journal order, with later fields superseding earlier fields, and reconciles a task's chain only when observed fields match its final intended state. ID presence or a newer observed version alone is insufficient. Completion remains sticky while sync lags. Newer conflicting observations retain pending fields and emit a warning (`pending_conflict` in task JSON). Delete intents hide rows without changing observations; observed tombstones confirm deletes. A newer task-resource sync proving absence can also confirm deletion of a previously observed task. Explicit tombstone receipts are published in generation token metadata so deletion of an unobserved pending create can be confirmed safely.
 
@@ -73,7 +73,7 @@ Trashed-state policy is **entity retention**: trashed observations stay in the g
 
 ### Scheduling and timezones
 
-All schedule writes accept `--timezone <IANA>` (e.g., `America/Los_Angeles`), which determines how `--date`/`--at` inputs are interpreted. Precedence: explicit `--timezone` flag > profile setting (`~/.config/af/config.json`) > system local timezone. UTC hosts and LA hosts produce identical instants for identical inputs.
+Task/event scheduling and slot creation accept `--timezone <IANA>` (e.g., `America/Los_Angeles`), which determines how `--date`/`--at` inputs are interpreted. Precedence: explicit `--timezone` flag > profile setting (`~/.config/af/config.json`) > system local timezone. UTC hosts and LA hosts produce identical instants for identical inputs.
 
 **Snooze semantics (behavioral break):** `af task snooze` now moves the actual `datetime` for timed tasks (previously it only changed the `date` field, leaving the time wrong). The basis depends on the unit:
 - `--duration 1h` (or `30m`): **elapsed basis** — adds exact milliseconds to the UTC instant.
@@ -99,7 +99,7 @@ af event attendees remove <event-id> <email> [more emails...] [--send-updates no
 
 **Event update zone preservation:** `af event update <id> --date ...` preserves the event's existing timezone unless `--timezone` is explicitly given. The update interprets the new date/time in the event's zone, not the host's local zone.
 
-Event v1 supports timed, writable Google events. `--rrule` creates recurring series (validated, serialized as `recurrence:['RRULE:...']`; `--dry-run` previews the first 5 occurrences in the event timezone). Recurring events require explicit `--scope`: `series` edits/deletes the master, `instance` edits a single occurrence via the Google fallback adapter (anchored by `original_start_time`, never current `start_time`; Akiflow sync reported as pending). Series delete truncates (via `--truncate-before` setting RRULE UNTIL) or deletes the master — never loops instances. All-day, reminders, and conferencing are unsupported. Event mutations default to `--send-updates none` (silent guest handling); use `--send-updates all` to notify guests.
+Event v1 supports timed, writable Google events. `--rrule` creates recurring series (validated, serialized as `recurrence:['RRULE:...']`; `--dry-run` previews the first 5 occurrences in the event timezone). Recurring events require explicit `--scope`: `series` edits/deletes the master, `instance` is exposed but refused because the provider fallback adapter is not implemented. Use the provider UI for per-instance changes. Series delete truncates (via `--truncate-before YYYY-MM-DD`, an exclusive local-day cutoff setting RRULE UNTIL) or deletes the master. Series scope requires its master UUID; foreign targets require --confirm. All-day, reminders, and conferencing are unsupported. Event mutations default to `--send-updates none` (silent guest handling); use `--send-updates all` to notify guests.
 
 ## Batch Operations
 
@@ -152,7 +152,7 @@ af convert tasks --to events --resume <token> --execute
 
 Conversion dry-runs by default. A selector (e.g. `--search`, `--date`, `--project`) or `--all` is required; unfiltered conversion without `--all` exits with code 2. Source deletion is only allowed with `--execute --delete-source`. Every target (including an existing match) must first pass fresh field verification; any unverified target blocks all source deletions and exits non-zero.
 
-Source→target mappings are persisted in a conversion journal (`conversion-journal.json` in the cache directory). Reruns skip already-converted tasks (no duplicates). On partial failure, the receipt includes `created_event_ids` and a `resume_token`; pass the token to `--resume` to continue without re-creating completed targets.
+Source→target mappings are persisted in a conversion journal (`conversion-journal.json` in the cache directory). Client target IDs are reserved under lock before submission. Reruns freshly confirm existing targets and never discard a mapping after absence, deletion, or an unreadable response. A corrupt journal refuses execution; resolve uncertain outcomes before retrying. On partial failure, the receipt includes `created_event_ids` and a `resume_token`; pass the token to `--resume` to continue without re-creating completed targets.
 
 ## Read-Only Projects, Auth, Cache, Diagnostics
 
@@ -169,7 +169,7 @@ af completion bash|zsh|fish
 
 ## Mutation Receipts And Verification
 
-Use `--verify` on `event create/update/delete` and `event attendees add/remove`, `task create/update/plan/snooze/complete/delete`, `slot create`, `batch events` mutations, and `convert tasks --to events --execute` to confirm the requested state via uncached, paginated Akiflow reads. The default timeout is **15 seconds**. Verification compares requested fields, including instants and timezone strings. This confirms Akiflow state, not Google/provider application. Deletion verification requires an observed tombstone.
+Use `--verify` on `event create/update/delete` and `event attendees add/remove`, `task create/update/plan/snooze/complete/delete`, `slot create/update/delete`, `batch events` mutations, and `convert tasks --to events --execute` to confirm the requested state via uncached, paginated Akiflow reads. The default timeout is **15 seconds**. Verification compares requested fields, including instants and timezone strings. This confirms Akiflow state, not Google/provider application. Deletion verification requires an observed tombstone.
 
 Without verification, a recorded event operation prints `Operation accepted (<operation_id>) — submitted, not yet confirmed`. Accepted exits zero but does not establish application. Failed, unknown, pending, mismatch, and timeout outcomes exit non-zero. A partial task/slot mutation reports succeeded, failed, and unknown IDs and exits non-zero. No mutation is automatically resubmitted after an uncertain outcome; inspect fresh state before manually rerunning.
 
@@ -225,7 +225,7 @@ Expansion performs no API calls or cache writes. Queries without an upper bound
 use 366 days from the lower bound (or master start); each series is limited to
 1000 slots and 100,000 examined rule candidates, including historical ones.
 Very old dense rules can therefore exhaust the work limit before the requested
-window. Malformed rules/timezones and EXRULE series retain materialized records
+window. Safety-limit exhaustion and malformed/unsupported rules emit warnings; materialized records remain available. Malformed rules/timezones and EXRULE series retain materialized records
 without expansion. DST gaps are skipped and folds use the first instant. An explicit calendar can
 select a hidden calendar, but deleted calendars remain excluded. Without an
 explicit calendar, the active visible calendar set applies. Account and connector
@@ -278,13 +278,13 @@ Akiflow tasks without a provider origin ID never join echo groups. Owner overrid
 remain informational: the linked event owns time even when the linked times diverge.
 
 The review envelope stays at schema version 1 and includes ISO `generated_at`,
-local IANA `timezone`, `provenance: {generation, observed_at}`, the window,
+effective IANA `timezone`, `provenance: {generation, observed_at}`, the window,
 occurrences, unioned busy minutes, free windows, and warnings. Envelope
 `observed_at` is the oldest fetch timestamp across events/slots/tasks/calendars,
 or null if any is unknown. Occurrences have provider identity plus `observedAt`,
-`generation`, and `pending: false`. Pending is reserved for workstream D's overlay.
-The legacy `pending-tasks.json` helper used by task list is not part of these
-snapshot calendar/audit reads.
+`generation`, and `pending`. Calendar/audit pin tasks with the other resources,
+then apply pending task intents without repinning or writing. Intent-only task
+rows have unknown observedAt, and pending values are not server confirmation.
 
 ## af reconcile
 
@@ -316,7 +316,7 @@ limit is 31 local calendar days, including both endpoints. Windows are half-open
 `[start,end)` and handle 23/25-hour DST days using calendar-day arithmetic.
 
 Timezone precedence is `--timezone`, then `~/.config/af/config.json`'s `timezone`,
-then the host timezone. The September 30 example above reads
+then the host timezone. Calendar/audit use the same explicit/profile/host precedence. The September 30 example above reads
 `[2026-09-30T07:00:00Z,2026-10-01T07:00:00Z)` on both providers. All-day events
 participate in presence comparisons; Akiflow's inclusive end date is converted
 to Google's exclusive end date. All-day window intersection uses the canonical
@@ -417,3 +417,9 @@ Sparse cancellation records remain null for absent title/time and may eventually
 disappear; a bounded date audit cannot guarantee historical deletion discovery.
 No tasks, slots, attendees, recurrence definitions, descriptions, reminders,
 repair operations, executable deletes, raw mode, or search are included in v1.
+
+
+Slot updates use the stored slot timezone for `--date`/`--at`. Repeat task membership
+flags to select multiple existing tasks; IDs are resolved and validated before any write.
+CLI booleans use their final spelling (`--json=false`, `--no-json`, and later positive
+flags are respected); a literal positional after `--` is never a global help flag.

@@ -66,7 +66,7 @@ test("snapshot pins once, reads timestamps from same generation, writes nothing"
 			]),
 		).toEqual(before);
 		expect(readFileSync(join(directory, "current"), "utf8")).toBe("gen-1\n");
-		expect(readdirSync(directory)).toEqual(["current", "gen-1"]);
+		expect(readdirSync(directory).sort()).toEqual(["current", "gen-1"]);
 	} finally {
 		spy.mockRestore();
 	}

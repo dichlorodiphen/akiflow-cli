@@ -39,14 +39,19 @@ export function createLogger(opts: LoggerOptions): Logger {
 			}
 			return;
 		}
-		const line = JSON.stringify({
-			ts: new Date().toISOString(),
-			level,
-			module: opts.module,
-			phase,
-			msg,
-			...(data && { data }),
-		});
+		let line: string;
+		try {
+			line = JSON.stringify({
+				ts: new Date().toISOString(),
+				level,
+				module: opts.module,
+				phase,
+				msg,
+				...(data && { data }),
+			});
+		} catch {
+			return;
+		}
 		try {
 			mkdirSync(dirname(path), { recursive: true });
 			appendFileSync(path, `${line}\n`, "utf8");

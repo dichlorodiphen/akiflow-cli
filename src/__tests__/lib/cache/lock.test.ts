@@ -253,6 +253,50 @@ describe("lock ownership and recovery", () => {
 		}
 	});
 
+	test("reclamation guard contention obeys the acquisition timeout", async () => {
+		const path = join(dir, ".lock");
+		const ready = join(dir, "guard-timeout-ready");
+		const library =
+			process.platform === "darwin"
+				? "/usr/lib/libSystem.B.dylib"
+				: "libc.so.6";
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`
+			import { dlopen, FFIType } from "bun:ffi";
+			import { openSync, writeFileSync } from "node:fs";
+			const lib = dlopen(${JSON.stringify(library)}, { flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } });
+			const fd = openSync(${JSON.stringify(`${path}.reclaim`)}, "a");
+			if (lib.symbols.flock(fd, 2) !== 0) throw new Error("flock failed");
+			writeFileSync(${JSON.stringify(ready)}, "ready");
+			await Bun.sleep(60000);
+		`,
+			],
+			{ stdout: "ignore", stderr: "pipe" },
+		);
+		const previous = process.env.AF_LOCK_TIMEOUT_MS;
+		try {
+			for (let i = 0; i < 100 && !existsSync(ready); i++) await Bun.sleep(10);
+			expect(existsSync(ready)).toBe(true);
+			process.env.AF_LOCK_TIMEOUT_MS = "100";
+			const started = Date.now();
+			await expect(
+				withLock(path, async () => {
+					throw new Error("must not enter");
+				}),
+			).rejects.toThrow("could not acquire reclamation guard");
+			expect(Date.now() - started).toBeLessThan(2000);
+			expect(existsSync(path)).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.AF_LOCK_TIMEOUT_MS;
+			else process.env.AF_LOCK_TIMEOUT_MS = previous;
+			child.kill("SIGKILL");
+			await child.exited;
+		}
+	});
+
 	test("holder heartbeats during a long critical section", async () => {
 		const path = join(dir, ".lock");
 		await withLock(path, async () => {

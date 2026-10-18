@@ -76,6 +76,40 @@ describe("task mutation command receipts", () => {
 		expect(result.receipts[0]?.status).toBe("mismatch");
 		expect(result.receipts[0]?.differingFields).toEqual(["title"]);
 	});
+	test("slot deletion verification accepts a fresh tombstone", async () => {
+		const slotClient = {
+			get: async () => ({
+				success: true,
+				data: [{ id: "a", deleted_at: "2026-06-22T00:00:00Z" }],
+			}),
+		} as unknown as AkiflowClient;
+		const result = await taskMutationOutcome(
+			slotClient,
+			{ success: true, message: null, data: [{ id: "a" }] },
+			[{ id: "a", deleted_at: "2026-06-22T00:00:00Z" } as { id: string }],
+			true,
+			"slot",
+		);
+		expect(result.ok).toBe(true);
+		expect(result.receipts[0]?.status).toBe("verified");
+	});
+	test("active slot updates carrying deleted_at:null verify their changed fields", async () => {
+		const slotClient = {
+			get: async () => ({
+				success: true,
+				data: [{ id: "a", deleted_at: null, title: "Changed" }],
+			}),
+		} as unknown as AkiflowClient;
+		const result = await taskMutationOutcome(
+			slotClient,
+			{ success: true, message: null, data: [{ id: "a" }] },
+			[{ id: "a", deleted_at: null, title: "Changed" } as { id: string }],
+			true,
+			"slot",
+		);
+		expect(result.ok).toBe(true);
+		expect(result.receipts[0]?.status).toBe("verified");
+	});
 	test("transport uncertainty creates unknown receipts without a retry", () => {
 		const result = unknownTaskOutcome(["a", "b"], new Error("Connection lost"));
 		expect(result.ok).toBe(false);

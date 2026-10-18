@@ -33,7 +33,7 @@ import {
 	deleteNeedsConfirmation,
 	loadCreatedEventIds,
 } from "../lib/event-creation-journal";
-import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import { outputMutation } from "../lib/mutation-output";
 import {
 	editRecurrenceInstance,
 	getCapabilities,
@@ -58,9 +58,9 @@ type MutableEvent = Record<string, unknown>;
 
 const ATTENDEE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function fail(message: string): never {
+function fail(message: string, exitCode = 1): never {
 	console.error(`Error: ${message}`);
-	process.exit(1);
+	process.exit(exitCode);
 }
 
 /**
@@ -176,7 +176,10 @@ export function resolveCachedEvent(events: Event[], identifier: string): Event {
 	);
 }
 
-export function validateMutableTimedGoogleEvent(event: Event): void {
+export function validateMutableTimedGoogleEvent(
+	event: Event,
+	allowRecurring = false,
+): void {
 	// Central target rejection (cancelled/deleted/read-only/hidden) with
 	// precise reasons; the v1 capability limits below are CLI-specific.
 	const targetReason = eventTargetRejectionReason(event);
@@ -195,12 +198,13 @@ export function validateMutableTimedGoogleEvent(event: Event): void {
 		fail(`Event "${event.id}" is all-day or missing timed start/end fields`);
 	}
 	if (
-		event.recurring_id ||
-		event.origin_recurring_id ||
-		(Array.isArray(event.recurrence)
-			? event.recurrence.length > 0
-			: event.recurrence) ||
-		event.recurrence_exception
+		!allowRecurring &&
+		(event.recurring_id ||
+			event.origin_recurring_id ||
+			(Array.isArray(event.recurrence)
+				? event.recurrence.length > 0
+				: event.recurrence) ||
+			event.recurrence_exception)
 	) {
 		fail(
 			`Event "${event.id}" is recurring; recurring event updates are not implemented in v1`,
@@ -274,7 +278,7 @@ export function buildEventUpdatePayload({
 	content.sendUpdates = sendUpdates;
 	if (location !== undefined) {
 		if (location.trim()) content.location = location.trim();
-		else delete content.location;
+		else content.location = null;
 	}
 
 	payload.title = title ?? event.title ?? "";
@@ -513,8 +517,21 @@ export const eventUpdateCommand = defineCommand({
 		}
 
 		const event = resolveCachedEvent(events, args.id as string);
-		validateMutableTimedGoogleEvent(event);
+		validateMutableTimedGoogleEvent(event, scope !== null);
 
+		if (
+			scope === "series" &&
+			((event.recurring_id && event.recurring_id !== event.id) ||
+				(event.origin_recurring_id &&
+					event.origin_recurring_id !== event.origin_id) ||
+				event.recurrence_exception ||
+				(event.original_start_time &&
+					!(Array.isArray(event.recurrence) && event.recurrence.length > 0)))
+		) {
+			fail(
+				`Event "${event.id}" is a recurrence instance; --scope series requires the series master UUID`,
+			);
+		}
 		const isRecurring =
 			(Array.isArray(event.recurrence)
 				? event.recurrence.length > 0
@@ -626,7 +643,7 @@ export const eventUpdateCommand = defineCommand({
 			? resolveDateInput(args.date as string)
 			: observedDate;
 		const observedTime = `${String(observedWall.hours).padStart(2, "0")}:${String(observedWall.minutes).padStart(2, "0")}`;
-		const startTime =
+		let startTime =
 			args.date || args.at
 				? resolveTimeInput(
 						date,
@@ -635,6 +652,14 @@ export const eventUpdateCommand = defineCommand({
 						fold,
 					)
 				: (event.start_time as string);
+		if (args.date && !args.at) {
+			const instant = new Date(event.start_time!);
+			startTime = new Date(
+				Date.parse(startTime) +
+					instant.getUTCSeconds() * 1000 +
+					instant.getUTCMilliseconds(),
+			).toISOString();
+		}
 		let durationSeconds =
 			(Date.parse(event.end_time as string) -
 				Date.parse(event.start_time as string)) /
@@ -646,6 +671,8 @@ export const eventUpdateCommand = defineCommand({
 				fail(error instanceof Error ? error.message : String(error));
 			}
 		}
+		if (!Number.isFinite(durationSeconds) || durationSeconds <= 0)
+			fail("Event duration must be greater than zero", 2);
 		const endTime = new Date(
 			Date.parse(startTime) + durationSeconds * 1000,
 		).toISOString();
@@ -672,16 +699,54 @@ export const eventUpdateCommand = defineCommand({
 			);
 			return;
 		}
-		if (!args.date && !args.at && event.end_datetime_tz !== undefined) {
+		if (
+			!args.date &&
+			!args.at &&
+			!args.timezone &&
+			event.end_datetime_tz !== undefined
+		) {
 			payload.end_datetime_tz = event.end_datetime_tz;
 		}
 
-		// Explicit patch intent: the operation kind is fixed here, never
-		// inferred from the payload's status/origin_id fields.
+		// Patch only user-requested fields. Replaying a complete stale event
+		// would overwrite an independent concurrent edit (title vs description).
+		const changed = new Set<string>();
+		if (args.title !== undefined) changed.add("title");
+		if (
+			args.description !== undefined ||
+			args["description-file"] !== undefined
+		)
+			changed.add("description");
+		if (args.location !== undefined) changed.add("location");
+		if (args.date !== undefined || args.at !== undefined) {
+			changed.add("start_time");
+			changed.add("end_time");
+			changed.add("start_datetime_tz");
+			changed.add("end_datetime_tz");
+		}
+		if (args.duration !== undefined) changed.add("end_time");
+		if (args.timezone !== undefined) {
+			changed.add("start_datetime_tz");
+			changed.add("end_datetime_tz");
+		}
+		if (changed.size === 0) fail("No changes provided for event update", 2);
+		const desired = providerEventPayload(payload);
+		const changes = Object.fromEntries(
+			[...changed].map((field) => [
+				field,
+				field === "end_datetime_tz" ? payload.end_datetime_tz : desired[field],
+			]),
+		);
+		const base = Object.fromEntries(
+			Object.entries(eventOperationBase(event)).filter(([field]) =>
+				changed.has(field),
+			),
+		);
+		// Explicit patch intent: kind is fixed, never inferred from payload fields.
 		const operation = buildPatchEventOperation(
 			eventOperationRoute(event),
-			eventOperationBase(event),
-			providerEventPayload(payload),
+			base,
+			changes,
 			sendUpdates,
 		);
 		const response = await client.submitEventOperations([operation]);
@@ -691,7 +756,7 @@ export const eventUpdateCommand = defineCommand({
 			const verification = await verifyEventFields(
 				client,
 				event.id,
-				eventExpectedFields(payload),
+				changes,
 				verificationOptions(),
 			);
 			if (isReadOnlyCanonical(verification.observed)) {
@@ -801,8 +866,21 @@ export const eventDeleteCommand = defineCommand({
 		}
 
 		const event = resolveCachedEvent(events, args.id as string);
-		validateMutableTimedGoogleEvent(event);
+		validateMutableTimedGoogleEvent(event, scope !== null);
 
+		if (
+			scope === "series" &&
+			((event.recurring_id && event.recurring_id !== event.id) ||
+				(event.origin_recurring_id &&
+					event.origin_recurring_id !== event.origin_id) ||
+				event.recurrence_exception ||
+				(event.original_start_time &&
+					!(Array.isArray(event.recurrence) && event.recurrence.length > 0)))
+		) {
+			fail(
+				`Event "${event.id}" is a recurrence instance; --scope series requires the series master UUID`,
+			);
+		}
 		const isRecurring =
 			(Array.isArray(event.recurrence)
 				? event.recurrence.length > 0
@@ -816,51 +894,74 @@ export const eventDeleteCommand = defineCommand({
 		const truncateBefore = (
 			args["truncate-before"] as string | undefined
 		)?.trim();
+		if (truncateBefore && scope !== "series")
+			fail("--truncate-before requires --scope series", 2);
 		if (scope === "series" && truncateBefore) {
-			// Truncate: set RRULE UNTIL instead of deleting the master.
+			// The flag names an exclusive calendar-day boundary in the series zone.
+			// RRULE UNTIL is inclusive, so stop one second before local midnight.
+			let recurrence: string[];
+			try {
+				parseCalendarDate(truncateBefore);
+				const boundary = zonedTimeToUtc(
+					truncateBefore,
+					0,
+					0,
+					event.start_datetime_tz || getLocalTimezone(),
+				);
+				recurrence = truncateSeriesUntil(
+					Array.isArray(event.recurrence) ? event.recurrence : null,
+					new Date(Date.parse(boundary) - 1000),
+					new Date(event.start_time!),
+					event.start_datetime_tz || getLocalTimezone(),
+				);
+			} catch (error) {
+				fail(error instanceof Error ? error.message : String(error), 2);
+			}
 			if (args["dry-run"]) {
-				console.log(
-					JSON.stringify(
-						{
-							scope: "series",
-							action: "truncate",
-							truncate_before: truncateBefore,
-							note: "Dry run: would set RRULE UNTIL on the series master.",
-						},
-						null,
-						2,
-					),
+				printDryRun(
+					[previewItem(event, { ...event, recurrence }, sendUpdates)],
+					args.json === true,
 				);
 				return;
 			}
-			try {
-				const until = new Date(truncateBefore);
-				if (Number.isNaN(until.getTime())) {
-					throw new Error(`Invalid date: ${truncateBefore}`);
-				}
-				const newRecurrence = truncateSeriesUntil(
-					Array.isArray(event.recurrence) ? event.recurrence : null,
-					until,
+			if (
+				args.confirm !== true &&
+				deleteNeedsConfirmation(event.id, loadCreatedEventIds())
+			)
+				fail(
+					`Event "${event.id}" was not created by this CLI. Re-run with --confirm to truncate its future occurrences.`,
 				);
-				console.log(
-					JSON.stringify(
-						{
-							scope: "series",
-							action: "truncate",
-							event_id: event.id,
-							new_recurrence: newRecurrence,
-							note: "Truncation payload prepared. Submit via event update on the series master.",
-						},
-						null,
-						2,
-					),
+			const operation = buildPatchEventOperation(
+				eventOperationRoute(event),
+				{ recurrence: event.recurrence },
+				{ recurrence },
+				sendUpdates,
+			);
+			const response = await client.submitEventOperations([operation]);
+			const verifications = new Map<string, VerificationResult<Event>>();
+			if (args.verify === true && response.receipts[0]?.status === "accepted") {
+				const verification = await verifyEventFields(
+					client,
+					event.id,
+					{ recurrence },
+					verificationOptions(),
 				);
-			} catch (error) {
-				console.error(
-					`Error: ${error instanceof Error ? error.message : String(error)}`,
-				);
-				process.exit(2);
+				verifications.set(event.id, verification);
+				if (verification.status === "verified" && verification.observed)
+					await upsertResourceRecords("events", [verification.observed]);
 			}
+			outputMutation({
+				command: "event delete",
+				json: args.json === true,
+				receipts: response.receipts,
+				verifications,
+				result: {
+					event_id: event.id,
+					scope: "series",
+					action: "truncate",
+					recurrence,
+				},
+			});
 			return;
 		}
 		if (isRecurring && !scope) {
@@ -902,7 +1003,7 @@ export const eventDeleteCommand = defineCommand({
 		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
 		if (receipt && receipt.status === "accepted") {
-			clearCreatedEvent(event.id);
+			await clearCreatedEvent(event.id);
 		}
 		const verifications = new Map<string, VerificationResult<Event>>();
 		if (receipt?.status === "accepted" && args.verify === true) {

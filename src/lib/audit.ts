@@ -77,7 +77,9 @@ export function auditStatusCounts(
 	effective: readonly Occurrence[],
 ) {
 	const seen = [
-		...(input.events ?? []).map(normalizeEvent),
+		...(input.events ?? []).map((event) =>
+			normalizeEvent(event, query.timezone),
+		),
 		...(input.slots ?? []).map(normalizeSlot),
 		...(input.tasks ?? []).map(normalizeTask),
 	]

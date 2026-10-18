@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ApiResponse } from "../../../lib/api/types";
@@ -36,6 +42,29 @@ function fakeClient() {
 }
 
 describe("rebuild", () => {
+	test("rebuild recovers a corrupt pointer without reading replaced observations", async () => {
+		writeFileSync(join(dir, "current"), "not-a-generation");
+		writeFileSync(join(dir, "tokens.json"), "malformed legacy tokens");
+		writeFileSync(join(dir, "pending-tasks.json"), "preserved intent");
+		await rebuild(fakeClient());
+		expect((await readResource(fakeClient(), "tasks"))[0]?.id).toBe("tasks-1");
+		expect(readFileSync(join(dir, "pending-tasks.json"), "utf8")).toBe(
+			"preserved intent",
+		);
+	});
+	test("failed rebuild retains the previous pointer and local journals", async () => {
+		await rebuild(fakeClient());
+		const before = readFileSync(join(dir, "current"), "utf8");
+		const failing = {
+			get: async <T>(): Promise<ApiResponse<T[]>> => {
+				throw new Error("offline");
+			},
+		};
+		await expect(rebuild(failing)).rejects.toThrow("offline");
+		expect(readFileSync(join(dir, "current"), "utf8")).toBe(before);
+		expect((await readResource(fakeClient(), "tasks"))[0]?.id).toBe("tasks-1");
+	});
+
 	test("creates all 8 resource JSONLs + tokens.json with last_full_sync_at", async () => {
 		const summary = await rebuild(fakeClient());
 		for (const res of [

@@ -16,20 +16,16 @@ export function parseDuration(duration: string): number {
 	const msPerDay = msPerHour * 24;
 	const msPerWeek = msPerDay * 7;
 
-	switch (unit) {
-		case "m":
-			return value * msPerMinute;
-		case "h":
-			return value * msPerHour;
-		case "d":
-			return value * msPerDay;
-		case "w":
-			return value * msPerWeek;
-		default:
-			throw new Error(
-				`Invalid duration unit: "${unit}". Supported units: m, h, d, w`,
-			);
-	}
+	const factors: Record<string, number> = {
+		m: msPerMinute,
+		h: msPerHour,
+		d: msPerDay,
+		w: msPerWeek,
+	};
+	const result = value * factors[unit]!;
+	if (!Number.isSafeInteger(result))
+		throw new Error(`Duration is too large: "${duration}"`);
+	return result;
 }
 
 export function parseDurationToSeconds(duration: string): number {

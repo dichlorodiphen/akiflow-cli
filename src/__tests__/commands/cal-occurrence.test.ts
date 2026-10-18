@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { runMergedCalendar } from "../../commands/cal";
 import * as cache from "../../lib/cache";
+import { readOccurrences } from "../../lib/occurrence-read";
 import * as taskRepository from "../../lib/tasks";
 import { event, instant, slot, task } from "../lib/occurrence-fixtures";
 
@@ -12,8 +13,10 @@ afterEach(() => {
 	readTasks?.mockRestore();
 	log.mockClear();
 });
-function seed() {
-	const tasks = [task({ duration: 10800 })];
+function seed(
+	tasks = [task({ duration: 10800 })],
+	tasksObservedAt: string | null = null,
+) {
 	readTasks = spyOn(taskRepository, "readTasks").mockResolvedValue(tasks);
 	snapshot.mockResolvedValue({
 		data: {
@@ -36,7 +39,7 @@ function seed() {
 		generation: "gen-1",
 		observedAt: {
 			events: null,
-			tasks: null,
+			tasks: tasksObservedAt,
 			time_slots: null,
 			calendars: null,
 		},
@@ -77,4 +80,34 @@ test("cal free uses the selector window, capacity union, and minimum duration", 
 			end: new Date(2026, 5, 21).toISOString(),
 		},
 	]);
+});
+
+test("cal pins task observations alongside events and never repins through readTasks", async () => {
+	seed();
+	await runMergedCalendar({ date: "2026-06-20", summary: true, json: true });
+	expect(snapshot.mock.calls[0]?.[1]).toContain("tasks");
+	expect(readTasks).not.toHaveBeenCalled();
+});
+
+test("intent-only task never claims a resource observation timestamp", async () => {
+	seed([], "2026-06-20T00:00:00Z");
+	const overlay = spyOn(taskRepository, "overlayPendingTasks").mockReturnValue([
+		task({ pending: true }),
+	]);
+	try {
+		const result = await readOccurrences({} as never, {
+			date: "2026-06-20",
+			timezone: "UTC",
+		});
+		const occurrence = result.pairs.find(
+			(pair) => pair.occurrence.source === "task",
+		)?.occurrence;
+		expect(occurrence?.provenance).toMatchObject({
+			pending: true,
+			generation: "gen-1",
+			observedAt: null,
+		});
+	} finally {
+		overlay.mockRestore();
+	}
 });

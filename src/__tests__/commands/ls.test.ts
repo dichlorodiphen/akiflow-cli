@@ -1416,3 +1416,65 @@ describe("ls command with title fallback", () => {
 		writeFileMock.mockRestore();
 	});
 });
+
+describe("composed list filters", () => {
+	for (const [flags, included, excluded] of [
+		[
+			{ today: true, done: true },
+			"Completed task",
+			"Complete project documentation",
+		],
+		[{ today: true, all: true }, "Completed task", "Tomorrow task"],
+		[
+			{ today: true, project: "work" },
+			"Work project task",
+			"Complete project documentation",
+		],
+		[
+			{ priority: "1", inbox: true },
+			"Inbox task without date",
+			"Tomorrow task",
+		],
+	] as const) {
+		it(`retains aliases and project filters with ${JSON.stringify(flags)}`, async () => {
+			const read = spyOn(tasks, "readTasks").mockResolvedValue(mockTasks);
+			const log = spyOn(console, "log").mockImplementation(() => {});
+			try {
+				await lsCommand.run!({
+					args: { ...flags, plain: true, _task: [] },
+				} as never);
+				expect(log.mock.calls[0]?.[0]).toContain(included);
+				expect(log.mock.calls[0]?.[0]).not.toContain(excluded);
+			} finally {
+				read.mockRestore();
+				log.mockRestore();
+			}
+		});
+	}
+});
+
+it("retains recurrence exclusion dates when generating today's virtual task", async () => {
+	const master = {
+		...mockTasks[0]!,
+		id: "excluded-master",
+		title: "Excluded recurring task",
+		date: null,
+		original_datetime: recurrenceAnchor,
+		recurrence: [
+			"RRULE:FREQ=DAILY",
+			`EXDATE:${recurrenceAnchor.replace(/[-:]/g, "").replace(".000", "")}`,
+		],
+	};
+	// Compatibility fixture: older cache records can carry array recurrence.
+	const read = spyOn(tasks, "readTasks").mockResolvedValue([
+		{ ...master, recurrence: master.recurrence as unknown as string },
+	]);
+	const log = spyOn(console, "log").mockImplementation(() => {});
+	try {
+		await lsCommand.run!({ args: { plain: true, _task: [] } } as never);
+		expect(log.mock.calls[0]?.[0]).not.toContain("Excluded recurring task");
+	} finally {
+		read.mockRestore();
+		log.mockRestore();
+	}
+});

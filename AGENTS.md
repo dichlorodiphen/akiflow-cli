@@ -122,8 +122,9 @@ recurrence exceptions.
 `af audit --date YYYY-MM-DD --json` emits schema version 1 with audit metadata
 and a review envelope. Echo suggestions never suppress records; linked events
 own time, and native tasks without provider IDs never echo-group. Occurrence
-provenance uses resource fetch time and generation; `pending: false` is reserved
-for D. The legacy task-list pending helper is separate from occurrence snapshots.
+provenance uses resource fetch time and generation. Tasks are pinned with the
+other resources, then overlaid with pending intents without repinning or writing;
+intent-only tasks have unknown observedAt. Pending intent is never server confirmation.
 
 ## Read-only reconciliation
 

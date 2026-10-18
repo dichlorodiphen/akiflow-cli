@@ -1,63 +1,41 @@
 # Installation
 
-## Option 1: npm (Recommended for Bun users)
+This private fork's command surface differs from the original npm package and
+upstream release binaries. Build this repository to install the matching CLI:
 
 ```bash
-bun install -g akiflow-cli
-```
-
-This installs the `af` command globally.
-
-## Option 2: Prebuilt Binary (No runtime needed)
-
-Download the binary for your platform from [GitHub Releases](https://github.com/code-yeongyu/akiflow-cli/releases):
-
-### macOS (Apple Silicon)
-
-```bash
-curl -L https://github.com/code-yeongyu/akiflow-cli/releases/latest/download/af-darwin-arm64 -o af
-chmod +x af
-sudo mv af /usr/local/bin/
-```
-
-### macOS (Intel)
-
-```bash
-curl -L https://github.com/code-yeongyu/akiflow-cli/releases/latest/download/af-darwin-x64 -o af
-chmod +x af
-sudo mv af /usr/local/bin/
-```
-
-### Linux (x64)
-
-```bash
-curl -L https://github.com/code-yeongyu/akiflow-cli/releases/latest/download/af-linux-x64 -o af
-chmod +x af
-sudo mv af /usr/local/bin/
-```
-
-## Option 3: Build from Source
-
-```bash
-git clone https://github.com/code-yeongyu/akiflow-cli.git
+git clone https://github.com/dichlorodiphen/akiflow-cli.git
 cd akiflow-cli
-bun install
+bun install --frozen-lockfile
 bun run build
-sudo mv af /usr/local/bin/
+mkdir -p ~/.local/bin
+install -m 0755 ./af ~/.local/bin/af
 ```
 
-## Verify Installation
+Use Bun 1.3.14 (the verified CI version) and ensure `~/.local/bin` is on PATH.
+Dependencies are local, ignored build inputs; do not commit `node_modules` symlinks.
+To update, preserve any local changes, pull the intended source revision, reinstall
+locked dependencies, run the repository checks, rebuild, and replace the binary.
+Keep a rollback copy and record the revision for local builds. `af --version` reports
+the package version, which alone does not distinguish local patches.
+
+## Verify installation
 
 ```bash
+af --version
 af --help
+af reconcile --help
 ```
 
-## First-time Setup
+## First-time setup
 
-After installation, extract credentials from your browser:
+Sign in to Akiflow in a supported browser, then explicitly extract credentials:
 
 ```bash
 af auth login
 ```
 
-Requires Akiflow to be logged in via browser (Chrome, Firefox, Safari, Arc, Brave, Edge supported).
+Chrome, Firefox, Safari, Arc, Brave, and Edge storage discovery is supported.
+Platform-specific extraction still depends on browser storage format and OS access.
+Do not copy credentials or production caches into the repository. Run `af refresh`
+to populate local observations after authentication.

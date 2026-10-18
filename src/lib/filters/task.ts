@@ -65,8 +65,8 @@ function expandStatusNames(names: StatusName[]): Set<TaskState> {
 }
 
 function inDateRange(t: Task, from: Date, to: Date): boolean {
-	const fromMs = startOfDay(from).getTime();
-	const toMs = endOfDay(to).getTime();
+	const fromMs = from.getTime();
+	const toMs = to.getTime();
 	if (t.date) {
 		const day = parseLocalDate(t.date);
 		if (day) {

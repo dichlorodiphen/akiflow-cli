@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import type { Task, TaskStatus } from "../../lib/api/types";
 import { taskStateOf } from "../../lib/api/types";
 
@@ -53,4 +53,9 @@ describe("taskStateOf", () => {
 			),
 		).toBe("deleted");
 	});
+});
+
+it("status-only tombstones and trash take precedence over done", () => {
+	expect(taskStateOf(task({ status: 9, done: true }))).toBe("deleted");
+	expect(taskStateOf(task({ status: 10, done: true }))).toBe("trashed");
 });

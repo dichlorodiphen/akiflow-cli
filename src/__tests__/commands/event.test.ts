@@ -176,6 +176,82 @@ describe("event command", () => {
 		expect(payload.user_id).toBeUndefined();
 	});
 
+	it("truncates the master through one silent recurrence patch before a local date", async () => {
+		const master = event({
+			recurrence: ["RRULE:FREQ=DAILY"],
+			recurring_id: "event-123456",
+			origin_recurring_id: null,
+			original_start_time: null,
+		});
+		readResourceSpy.mockResolvedValue([master] as any);
+		fetchSpy.mockImplementation(
+			async (_input: unknown, init?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: JSON.parse(init?.body as string).map((op: object) => ({
+							...op,
+							status: "succeeded",
+						})),
+					}),
+				),
+		);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await eventDeleteCommand.run!({
+				args: {
+					id: master.id,
+					scope: "series",
+					"truncate-before": "2026-06-25",
+					confirm: true,
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any);
+			expect(fetchSpy).toHaveBeenCalledTimes(1);
+			const operation = JSON.parse(
+				fetchSpy.mock.calls[0]?.[1]?.body as string,
+			)[0];
+			expect(operation.operation).toBe("patch");
+			expect(operation.payload.send_updates).toBe(false);
+			expect(operation.payload.changes.recurrence.join("\n")).toContain(
+				"UNTIL=20260625T065959Z",
+			);
+			expect(JSON.parse(String(output.mock.calls[0]?.[0])).status).toBe(
+				"accepted",
+			);
+		} finally {
+			output.mockRestore();
+		}
+	});
+
+	it("refuses series scope on an observed recurring instance", async () => {
+		readResourceSpy.mockResolvedValue([
+			event({
+				recurring_id: "master-id",
+				original_start_time: "2026-06-20T16:00:00Z",
+			}),
+		] as any);
+		const exit = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("process.exit");
+		});
+		const error = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(
+				eventDeleteCommand.run!({
+					args: { id: "event-123", scope: "series", confirm: true, _: [] },
+					rawArgs: [],
+				} as any),
+			).rejects.toThrow("process.exit");
+			expect(error.mock.calls.flat().join(" ")).toContain("series master UUID");
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			exit.mockRestore();
+			error.mockRestore();
+		}
+	});
+
 	it("updates a cached event through /v5/event_operations", async () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		// The event is in America/Los_Angeles. 10:00 LA time (PDT, UTC-7) = 17:00 UTC.
@@ -234,12 +310,13 @@ describe("event command", () => {
 						start_time: expectedStart,
 						end_time: expectedEnd,
 						location: "PDX",
-						attendees: event().attendees,
 					}),
 					send_updates: false,
 				},
 			}),
 		);
+		expect(operations[0].payload.changes).not.toHaveProperty("attendees");
+		expect(operations[0].payload.changes).not.toHaveProperty("recurrence");
 		expect(consoleLogSpy).not.toHaveBeenCalledWith(
 			"✓ Akiflow calendar event updated successfully",
 		);
@@ -331,7 +408,7 @@ describe("event command", () => {
 		const consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
 		// The fixture event is CLI-created, so the delete-propagation guard
 		// does not demand --confirm.
-		recordCreatedEvent({
+		await recordCreatedEvent({
 			event_id: "event-123456",
 			created_at: "2026-06-20T00:00:00.000Z",
 			provenance: { title: "Portland trip: flight", calendar_id: "cal-123" },

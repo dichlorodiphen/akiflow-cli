@@ -53,6 +53,7 @@ export function buildReviewEnvelope(
 		generation: null,
 		observed_at: null,
 	},
+	timezone = getLocalTimezone(),
 ): ReviewEnvelope {
 	const effective = markPossibleEchoes(deduplicateOccurrences(occurrences));
 	// Envelope capacity describes its window; occupiedMinutes itself never clamps.
@@ -77,7 +78,7 @@ export function buildReviewEnvelope(
 	return {
 		schema_version: 1,
 		generated_at: new Date().toISOString(),
-		timezone: getLocalTimezone(),
+		timezone,
 		provenance: metadata,
 		window: {
 			start: new Date(window.start).toISOString(),

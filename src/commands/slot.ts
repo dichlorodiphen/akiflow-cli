@@ -45,6 +45,7 @@ import {
 	unknownTaskOutcome,
 } from "../lib/task-mutation-output";
 import { readTasks, recordTaskIntent } from "../lib/tasks";
+import { formatInTimezone, zonedTimeToUtc } from "../lib/timezone";
 import { verifyFlag } from "../lib/verify-flag";
 import { createSlotCommand } from "./create";
 
@@ -209,15 +210,17 @@ export function resolveSlotTiming({
 		(currentEnd.getTime() - currentStart.getTime()) / 1000,
 	);
 
-	let date = formatLocalDate(currentStart);
+	const timezone = slot.start_datetime_tz || getLocalTimezone();
+	const wall = formatInTimezone(slot.start_time, timezone);
+	let date = `${wall.year}-${pad2(wall.month)}-${pad2(wall.day)}`;
 	if (hasDate) {
 		const parsed = parseDate(dateInput);
 		if (!parsed) fail(`Could not parse date "${dateInput}"`);
 		date = parsed;
 	}
 
-	let hours = currentStart.getHours();
-	let minutes = currentStart.getMinutes();
+	let hours = wall.hours;
+	let minutes = wall.minutes;
 	if (hasAt) {
 		const parsedTime = parseTime(atInput);
 		if (!parsedTime) {
@@ -239,10 +242,16 @@ export function resolveSlotTiming({
 	}
 	if (durationSeconds <= 0) fail("Slot duration must be greater than 0");
 
-	const startTime =
+	let startTime =
 		hasDate || hasAt
-			? createDateTimeUTC(date, hours, minutes)
+			? zonedTimeToUtc(date, hours, minutes, timezone)
 			: slot.start_time;
+	if (hasDate && !hasAt)
+		startTime = new Date(
+			Date.parse(startTime) +
+				currentStart.getUTCSeconds() * 1000 +
+				currentStart.getUTCMilliseconds(),
+		).toISOString();
 	const endTime = new Date(
 		new Date(startTime).getTime() + durationSeconds * 1000,
 	).toISOString();
@@ -251,7 +260,7 @@ export function resolveSlotTiming({
 		startTime,
 		endTime,
 		date,
-		timezone: getLocalTimezone(),
+		timezone,
 		changed: hasDate || hasAt || hasDuration,
 	};
 }
@@ -614,7 +623,7 @@ export const updateSlotCommand = defineCommand({
 		},
 		at: {
 			type: "string",
-			description: "New local start time (HH:MM)",
+			description: "New start time in the slot timezone (HH:MM)",
 		},
 		duration: {
 			type: "string",
@@ -663,7 +672,7 @@ export const updateSlotCommand = defineCommand({
 
 		const [slots, tasks] = await Promise.all([
 			mutationReader(args["dry-run"] === true)(client, "time_slots"),
-			mutationReader(args["dry-run"] === true)(client, "tasks"),
+			readTasks(client),
 		]);
 		const slot = resolveCachedSlot(slots, args.id as string);
 		requireActiveSlot(slot);

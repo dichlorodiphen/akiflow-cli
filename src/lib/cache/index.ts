@@ -43,8 +43,10 @@ async function syncPass(
 	cold: boolean,
 ): Promise<Record<Resource, ResourceSyncSummary>> {
 	return withLock(cacheLockPath(), async () => {
-		const base = await ensureGeneration();
-		const stage = stageGeneration(cold ? undefined : base);
+		// A full rebuild must recover even a corrupt/missing current generation;
+		// never read or migrate the observations it is replacing.
+		const base = cold ? undefined : await ensureGeneration();
+		const stage = stageGeneration(base);
 		try {
 			const tokens: Tokens = cold ? {} : await readTokens(base);
 			const summary = {} as Record<Resource, ResourceSyncSummary>;
@@ -255,6 +257,7 @@ export async function snapshotResources(
 	data: ResourceRecords;
 	generation: string | null;
 	observedAt: Record<Resource, string | null>;
+	deletedTasks: Record<string, string>;
 }> {
 	let pinned = pinGeneration();
 	if (!pinned) pinned = await withLock(cacheLockPath(), ensureGeneration);
@@ -288,7 +291,12 @@ export async function snapshotResources(
 				tokens.last_success_at?.[resource] ?? null,
 			]),
 		) as Record<Resource, string | null>;
-		return { data, generation: basename(directory), observedAt };
+		return {
+			data,
+			generation: basename(directory),
+			observedAt,
+			deletedTasks: { ...tokens.deleted_tasks },
+		};
 	};
 	try {
 		return capture(pinned);
