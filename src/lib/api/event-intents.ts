@@ -85,6 +85,13 @@ export function providerEventPayload(
 		start_datetime_tz: event.start_datetime_tz,
 	};
 
+	if (event.start_date != null) {
+		delete payload.start_time;
+		delete payload.end_time;
+		payload.start_date = event.start_date;
+		payload.end_date = event.end_date;
+	}
+
 	if (event.end_datetime_tz) {
 		payload.end_datetime_tz = event.end_datetime_tz;
 	}

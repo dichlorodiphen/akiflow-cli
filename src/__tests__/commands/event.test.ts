@@ -124,6 +124,229 @@ describe("event command", () => {
 		upsertResourceRecordsSpy.mockRestore();
 	});
 
+	it("moves an all-day span across DST without serializing timed instants", async () => {
+		readResourceSpy.mockResolvedValue([
+			event({
+				start_time: null,
+				end_time: null,
+				start_date: "2026-03-07",
+				end_date: "2026-03-09",
+			}),
+		] as any);
+		fetchSpy.mockImplementation(
+			async (_url: string | URL | Request, options?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: JSON.parse(options?.body as string).map((op: any) => ({
+							...op,
+							status: "succeeded",
+						})),
+					}),
+					{ status: 200 },
+				),
+		);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await eventUpdateCommand.run!({
+				args: { id: "event-123456", date: "2026-11-01", json: true, _: [] },
+				rawArgs: [],
+			} as any);
+			const op = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string)[0];
+			expect(op.payload.base).toEqual({
+				start_date: "2026-03-07",
+				end_date: "2026-03-09",
+			});
+			expect(op.payload.changes).toEqual({
+				start_date: "2026-11-01",
+				end_date: "2026-11-03",
+			});
+			expect(op.payload.send_updates).toBe(false);
+		} finally {
+			output.mockRestore();
+		}
+	});
+	it("updates one recurring instance through native operation and preserves siblings", async () => {
+		const parent = event({
+			id: "123e4567-e89b-12d3-a456-426614174000",
+			recurring_id: "123e4567-e89b-12d3-a456-426614174000",
+			recurrence: ["RRULE:FREQ=DAILY;COUNT=3"],
+		});
+		readResourceSpy.mockResolvedValue([parent] as any);
+		fetchSpy.mockImplementation(
+			async (_url: string | URL | Request, options?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: JSON.parse(options?.body as string).map((op: any) => ({
+							...op,
+							status: "succeeded",
+						})),
+					}),
+					{ status: 200 },
+				),
+		);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await eventUpdateCommand.run!({
+				args: {
+					id: parent.id,
+					scope: "instance",
+					"instance-anchor": "2026-06-21T16:00:00.000Z",
+					title: "Occurrence only",
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any);
+			const ops = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
+			expect(ops).toHaveLength(1);
+			expect(ops[0].event_id).not.toBe(parent.id);
+			expect(ops[0].payload).toEqual({
+				base: { title: parent.title },
+				changes: { title: "Occurrence only" },
+				original_start_time: "2026-06-21T16:00:00.000Z",
+				parent_event_id: parent.id,
+				send_updates: false,
+			});
+			expect(parent.title).not.toBe("Occurrence only");
+		} finally {
+			output.mockRestore();
+		}
+	});
+
+	it("routes instance deletion through a structural hidden master but never deletes the master", async () => {
+		const id = "123e4567-e89b-12d3-a456-426614174000";
+		const parent = event({
+			id,
+			recurring_id: id,
+			hidden: true,
+			recurrence: ["RRULE:FREQ=DAILY;COUNT=3"],
+		});
+		const child = event({
+			id: "actual-instance",
+			recurring_id: id,
+			original_start_time: "2026-06-21T16:00:00Z",
+			start_time: "2026-06-21T17:00:00Z",
+			end_time: "2026-06-21T18:00:00Z",
+			recurrence: null,
+		});
+		readResourceSpy.mockResolvedValue([parent, child] as any);
+		fetchSpy.mockImplementation(
+			async (_url: string | URL | Request, options?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: JSON.parse(options?.body as string).map((op: any) => ({
+							...op,
+							status: "succeeded",
+						})),
+					}),
+					{ status: 200 },
+				),
+		);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await eventDeleteCommand.run!({
+				args: {
+					id,
+					scope: "instance",
+					"instance-anchor": "2026-06-21T16:00:00Z",
+					confirm: true,
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any);
+			const ops = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
+			expect(ops).toHaveLength(1);
+			expect(ops[0].event_id).toBe(child.id);
+			expect(ops[0].payload).toEqual({
+				parent_event_id: id,
+				original_start_time: "2026-06-21T16:00:00.000Z",
+				send_updates: false,
+			});
+		} finally {
+			output.mockRestore();
+		}
+	});
+
+	it("does not let a structural hidden master authorize a hidden materialized occurrence", async () => {
+		const id = "123e4567-e89b-12d3-a456-426614174000";
+		const parent = event({
+			id,
+			recurring_id: id,
+			hidden: true,
+			recurrence: ["RRULE:FREQ=DAILY;COUNT=3"],
+		});
+		const child = event({
+			id: "hidden-child",
+			recurring_id: id,
+			hidden: true,
+			original_start_time: "2026-06-21T16:00:00Z",
+			recurrence: null,
+		});
+		readResourceSpy.mockResolvedValue([parent, child] as any);
+		const exit = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("process.exit");
+		});
+		const error = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(
+				eventDeleteCommand.run!({
+					args: {
+						id,
+						scope: "instance",
+						"instance-anchor": "2026-06-21T16:00:00Z",
+						confirm: true,
+						json: true,
+						_: [],
+					},
+					rawArgs: [],
+				} as any),
+			).rejects.toThrow("process.exit");
+			expect(error.mock.calls.flat().join(" ")).toContain("hidden");
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			exit.mockRestore();
+			error.mockRestore();
+		}
+	});
+
+	it("refuses an all-day timezone change before submitting any partial metadata edit", async () => {
+		readResourceSpy.mockResolvedValue([
+			event({
+				start_time: null,
+				end_time: null,
+				start_date: "2026-11-01",
+				end_date: "2026-11-02",
+			}),
+		] as any);
+		const exit = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("process.exit");
+		});
+		const error = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(
+				eventUpdateCommand.run!({
+					args: {
+						id: "event-123456",
+						timezone: "Asia/Tokyo",
+						title: "Partial edit forbidden",
+						json: true,
+						_: [],
+					},
+					rawArgs: [],
+				} as any),
+			).rejects.toThrow("process.exit");
+			expect(error.mock.calls.flat().join(" ")).toContain("civil dates");
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			exit.mockRestore();
+			error.mockRestore();
+		}
+	});
+
 	it("builds an update payload that preserves attendees and strips local-only fields", () => {
 		const source = event();
 		const payload = buildEventUpdatePayload({
@@ -179,6 +402,7 @@ describe("event command", () => {
 	it("truncates the master through one silent recurrence patch before a local date", async () => {
 		const master = event({
 			recurrence: ["RRULE:FREQ=DAILY"],
+			hidden: true,
 			recurring_id: "event-123456",
 			origin_recurring_id: null,
 			original_start_time: null,

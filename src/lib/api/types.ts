@@ -280,8 +280,8 @@ export type EventStatus = "confirmed" | "tentative" | "cancelled";
 export interface CreateEventPayload {
 	title: string;
 	description: string;
-	start_time: string;
-	end_time: string;
+	start_time: string | null;
+	end_time: string | null;
 	id: string;
 	status: EventStatus;
 	start_datetime_tz: string;

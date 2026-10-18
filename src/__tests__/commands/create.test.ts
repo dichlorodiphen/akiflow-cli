@@ -40,6 +40,134 @@ describe("create command", () => {
 		writeFileSpy.mockRestore();
 	});
 
+	it("creates an all-day date span with inclusive Akiflow end and no timed wire fields", async () => {
+		readResourceSpy.mockResolvedValue([
+			{
+				id: "cal-day",
+				akiflow_account_id: "account",
+				connector_id: "google",
+				origin_id: "owner@example.com",
+				akiflow_primary: true,
+				primary: true,
+				read_only: false,
+				hidden_at: null,
+				deleted_at: null,
+			},
+		] as any);
+		fetchSpy.mockImplementation(
+			async (_url: string | URL | Request, options?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: JSON.parse(options?.body as string).map((op: any) => ({
+							...op,
+							status: "succeeded",
+						})),
+					}),
+					{ status: 200 },
+				),
+		);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await createEventCommand.run!({
+				args: {
+					title: "Date fixture",
+					date: "2026-03-08",
+					"all-day": true,
+					"end-date": "2026-03-11",
+					timezone: "Pacific/Kiritimati",
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any);
+			const op = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string)[0];
+			expect(op.payload.event.start_date).toBe("2026-03-08");
+			expect(op.payload.event.end_date).toBe("2026-03-10");
+			expect(Object.hasOwn(op.payload.event, "start_time")).toBe(false);
+			expect(Object.hasOwn(op.payload.event, "end_time")).toBe(false);
+			expect(op.payload.send_updates).toBe(false);
+		} finally {
+			output.mockRestore();
+		}
+	});
+
+	it("verifies a pending all-day operation by fresh observation without replay", async () => {
+		readResourceSpy.mockResolvedValue([
+			{
+				id: "cal-day",
+				akiflow_account_id: "account",
+				connector_id: "google",
+				origin_id: "owner@example.com",
+				akiflow_primary: true,
+				primary: true,
+				read_only: false,
+				hidden_at: null,
+				deleted_at: null,
+			},
+		] as any);
+		let saved: any;
+		fetchSpy.mockImplementation(
+			async (_url: string | URL | Request, options?: RequestInit) => {
+				if (options?.method === "POST") {
+					saved = JSON.parse(options.body as string)[0];
+					return new Response(
+						JSON.stringify({
+							success: true,
+							data: [{ ...saved, status: "pending", result: {} }],
+						}),
+						{ status: 200 },
+					);
+				}
+				return new Response(
+					JSON.stringify({
+						success: true,
+						data: [
+							{
+								id: saved.event_id,
+								...saved.payload.event,
+								start_datetime_tz: null,
+								start_time: null,
+								end_time: null,
+								end_datetime_tz: null,
+								description: null,
+								content: {},
+								read_only: false,
+							},
+						],
+						has_next_page: false,
+					}),
+					{ status: 200 },
+				);
+			},
+		);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await createEventCommand.run!({
+				args: {
+					title: "Pending fixture",
+					date: "2026-11-01",
+					"all-day": true,
+					verify: true,
+					json: true,
+					_: [],
+				},
+				rawArgs: [],
+			} as any);
+			expect(
+				fetchSpy.mock.calls.filter(
+					(call: unknown[]) =>
+						(call[1] as RequestInit | undefined)?.method === "POST",
+				),
+			).toHaveLength(1);
+			expect(JSON.parse(output.mock.calls[0]?.[0] as string).status).toBe(
+				"verified",
+			);
+		} finally {
+			output.mockRestore();
+		}
+	});
+
 	it("creates a task slot and linked child tasks", async () => {
 		// given
 		const consoleLogSpy = spyOn(console, "log");

@@ -23,6 +23,8 @@ export type ExpectedEventFields = Partial<
 		| "description"
 		| "start_time"
 		| "end_time"
+		| "start_date"
+		| "end_date"
 		| "start_datetime_tz"
 		| "end_datetime_tz"
 		| "recurrence"
@@ -52,8 +54,19 @@ function equalField(
 	actual: unknown,
 	expected: unknown,
 ): boolean {
+	// Akiflow canonicalizes cleared descriptions to null on provider sync.
+	// Missing fields remain mismatches; only the two observed empty forms agree.
 	if (
-		["start_time", "end_time", "datetime"].includes(field) &&
+		field === "description" &&
+		(actual === null || actual === "") &&
+		(expected === null || expected === "")
+	)
+		return true;
+
+	if (
+		["start_time", "end_time", "datetime", "original_start_time"].includes(
+			field,
+		) &&
 		typeof actual === "string" &&
 		typeof expected === "string"
 	) {
@@ -94,6 +107,7 @@ async function verifyFields<T extends { id: string }>(
 	expected: Record<string, unknown>,
 	opts: VerificationOptions,
 	deletion = false,
+	allowCancellation = false,
 ): Promise<VerificationResult<T>> {
 	const timeoutMs = opts.timeoutMs ?? 15000;
 	const pollIntervalMs = opts.pollIntervalMs ?? 1500;
@@ -171,10 +185,19 @@ async function verifyFields<T extends { id: string }>(
 				if (deletion) {
 					if (
 						record.deleted_at != null ||
-						(path === "/v5/tasks" && record.status === 9)
-					)
-						return result("verified");
-					differingFields = ["deleted_at"];
+						(path === "/v5/tasks" && record.status === 9) ||
+						(allowCancellation && record.status === "cancelled")
+					) {
+						differingFields = Object.entries(expected)
+							.filter(
+								([field, value]) => !equalField(field, record[field], value),
+							)
+							.map(([field]) => field);
+						if (differingFields.length === 0) return result("verified");
+					} else
+						differingFields = [
+							allowCancellation ? "cancelled_or_deleted" : "deleted_at",
+						];
 				} else
 					for (const [field, value] of Object.entries(expected)) {
 						const actual =
@@ -273,6 +296,30 @@ export function verifyTimeSlotDeleted(
 		slotId,
 		{},
 		opts,
+		true,
+	);
+}
+
+/** Native occurrence cancellations keep deleted_at:null. Require full anchored identity. */
+export function verifyEventInstanceDeleted(
+	client: VerificationClient,
+	instance: { event: Event; parent: Event; anchor: string; allDay: boolean },
+	opts: VerificationOptions = {},
+): Promise<VerificationResult<Event>> {
+	return verifyFields<Event>(
+		client,
+		"/v5/events",
+		instance.event.id,
+		{
+			recurring_id: instance.parent.id,
+			calendar_id: instance.parent.calendar_id,
+			akiflow_account_id: instance.parent.akiflow_account_id,
+			connector_id: instance.parent.connector_id,
+			[instance.allDay ? "original_start_date" : "original_start_time"]:
+				instance.anchor,
+		},
+		opts,
+		true,
 		true,
 	);
 }

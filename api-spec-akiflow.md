@@ -817,12 +817,45 @@ curl -X GET "https://api.akiflow.com/v5/tasks?limit=100" \
 | `recurrence_exception` | `boolean` | Whether this record is an exception to the series |
 | `recurrence_exception_delete` | `boolean` | Whether the exception is a deletion |
 
-### Capability status (unconfirmed)
+### Native exception contract (confirmed 2026-10-18)
 
-- **Akiflow recurrence-exception writes**: NOT confirmed. The Akiflow API's support for per-instance edits (exceptions) is unknown as of 2026-09-30. The CLI gates exception writes behind `AF_AKIFLOW_EXCEPTION_WRITES=1` (explicit opt-in, disposable fixtures only). Default: refuse.
-- **Per-instance edits**: route via Google Calendar API directly (fallback adapter), using the event's observed `origin_id` as the Google event ID. Instance address: `<googleEventId>_<originalStartTimestamp>`. All Google writes use `sendUpdates=none`.
-- **Series delete**: truncate via RRULE UNTIL on the master, or delete the master. Never loop instances.
+The current official Akiflow renderer's events-core WASM generates native v5
+`patch` and `delete` operations for recurrence resolution `onlyThis`. An occurrence
+operation uses the ordinary connector/account/calendar route, the occurrence UUID
+as `event_id`, and payload fields `parent_event_id`, `send_updates` (boolean), plus
+exactly one of `original_start_time` (ISO instant) or `original_start_date` (civil
+date). Patches add field-minimal `base` and `changes`; deletes omit them.
 
-### Identity rule
+For a materialized/moved exception, preserve its observed UUID and original anchor.
+For an unmaterialized occurrence, the official rust client uses UUIDv5 with the
+master UUID namespace and canonical original ISO instant/date as the name. Validate
+fresh recurrence membership and account/calendar identity first; never infer a
+provider ID or search by title. Cancelled exceptions may retain `deleted_at:null`;
+confirmation requires their anchored identity and explicit cancellation status.
 
-Provider identity comes ONLY from observed `origin_id` / provider fields. The CLI never title-searches to guess a provider ID. Ambiguous or missing identity refuses to mutate.
+Live acceptance confirmed timed and all-day instance edits and unchanged siblings.
+Google propagation is asynchronous and distinct from fresh Akiflow verification.
+The old external Google fallback stub and speculative capability flags were removed.
+
+### All-day event contract (confirmed 2026-10-18)
+
+Akiflow record and operation dates use inclusive `start_date`/`end_date`. One day has
+equal dates. Google uses an exclusive end date. CLI `--end-date` is exclusive and is
+converted at the Akiflow boundary. Records have null timed fields; create operation
+payloads must OMIT `start_time`/`end_time` instead of sending null (server validates
+present values as dates). The official generator supplies date fields and timezone.
+Do not silently convert all-day civil dates into timed UTC midnight instants.
+
+### Materialized all-day deletion service compatibility
+
+Live acceptance found that the official anchored-delete shape could mark a moved
+all-day exception cancelled in Akiflow while leaving the Google instance confirmed.
+A direct ordinary delete operation using that freshly observed exception UUID and
+its exact connector/account/calendar route, with payload `{send_updates:false}` and
+without parent/anchor fields, removed only that instance on Google while preserving
+master and siblings. This is observed server compatibility behavior, not a claimed
+output of the official recurrence generator. The CLI uses it only for materialized
+all-day exceptions with provider origin_id, recurrence_exception:true, and validated
+parent/account/calendar/connector/original-date identity. Unmaterialized occurrences
+use the official anchored route. This is a preselected route, never an automatic
+fallback replay after an uncertain write.

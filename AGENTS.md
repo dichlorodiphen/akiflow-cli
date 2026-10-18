@@ -115,9 +115,11 @@ Do not "fix" a duplicate warning by deleting from the cache: rebuild first and
 re-check; a warning on a stale generation usually resolves to a single event.
 A reshape warning names a pattern the CLI can only suspect — confirm in the
 calendar UI (the UI is the source of truth when investigating a CLI bug) and
-delete the leftover there; per-instance deletes of a recurring series go
-through the Google Calendar connector, since the Akiflow API cannot create
-recurrence exceptions.
+delete the leftover only after confirmation. Native per-instance operations now use
+`af event delete <master-uuid> --scope instance --instance-anchor <original-anchor>`
+with foreign-target --confirm. Akiflow stores all-day end_date inclusively; the CLI
+--end-date input is exclusive. Fresh instance cancellation verification requires
+parent/account/calendar/original-anchor identity, not merely deleted_at.
 
 `af audit --date YYYY-MM-DD --json` emits schema version 1 with audit metadata
 and a review envelope. Echo suggestions never suppress records; linked events

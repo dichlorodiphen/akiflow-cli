@@ -14,9 +14,14 @@ export function eventExpectedFields(
 		description: payload.description,
 		start_time: payload.start_time,
 		end_time: payload.end_time,
-		start_datetime_tz: payload.start_datetime_tz,
+		...(payload.start_date != null
+			? { start_date: payload.start_date, end_date: payload.end_date }
+			: {}),
+		...(payload.start_date == null
+			? { start_datetime_tz: payload.start_datetime_tz }
+			: {}),
 		...(payload.recurrence != null ? { recurrence: payload.recurrence } : {}),
-		...(payload.end_datetime_tz !== undefined
+		...(payload.end_datetime_tz != null
 			? { end_datetime_tz: payload.end_datetime_tz }
 			: {}),
 		location:
@@ -83,7 +88,12 @@ export function outputMutation(input: {
 					receipts: [
 						...input.receipts.map((receipt) => {
 							const verification = input.verifications?.get(receipt.event_id);
-							return verification ? { ...receipt, verification } : receipt;
+							return verification
+								? {
+										...receipt,
+										verification: { ...verification, source: "akiflow" },
+									}
+								: receipt;
 						}),
 						...(input.additionalReceipts ?? []),
 					],
@@ -101,11 +111,13 @@ export function outputMutation(input: {
 			if (verification) {
 				switch (verification.status) {
 					case "verified":
-						console.log(`✓ Verified: ${receipt.event_id}`);
+						console.log(
+							`✓ Verified in Akiflow: ${receipt.event_id} (provider synchronization is separate)`,
+						);
 						break;
 					case "pending":
 						console.error(
-							`… Still pending after 15000ms: ${receipt.event_id}. Re-run with --verify.`,
+							`… Still pending: ${receipt.event_id}. Inspect fresh state before any resubmission.`,
 						);
 						break;
 					case "mismatch":
@@ -123,7 +135,7 @@ export function outputMutation(input: {
 				switch (receipt.status) {
 					case "accepted":
 						console.log(
-							`✓ Operation accepted (${receipt.operation_id}) — submitted, not yet confirmed. Re-run with --verify to confirm.`,
+							`✓ Operation accepted (${receipt.operation_id}) — submitted, not yet confirmed. Inspect fresh state; do not resubmit to verify.`,
 						);
 						break;
 					case "failed":
@@ -138,7 +150,7 @@ export function outputMutation(input: {
 						break;
 					case "pending":
 						console.error(
-							`… Operation pending server processing (${receipt.event_id}). Re-run with --verify.`,
+							`… Operation pending server processing (${receipt.event_id}). Inspect fresh state before any resubmission.`,
 						);
 						break;
 				}

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { defineCommand } from "citty";
+import { addCivilDays, allDaySpan } from "../lib/all-day";
 import { createClient } from "../lib/api/client";
 import {
 	buildCreateEventOperation,
@@ -41,6 +42,7 @@ import {
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { recordCreatedEvent } from "../lib/event-creation-journal";
 import { eventExpectedFields, outputMutation } from "../lib/mutation-output";
+import { fetchProjects } from "../lib/projects";
 import { previewOccurrences, validateRRule } from "../lib/recurrence";
 import { readTaskContext, resolveTaskId } from "../lib/task-context";
 import {
@@ -176,8 +178,10 @@ const foldArg = {
 export interface BuildEventPayloadInput {
 	title: string;
 	description?: string;
-	startTime: string;
-	endTime: string;
+	startTime: string | null;
+	endTime: string | null;
+	startDate?: string;
+	endDate?: string;
 	timezone?: string | null;
 	calendar: Calendar;
 	location?: string;
@@ -193,6 +197,8 @@ export function buildCreateEventPayload({
 	description = "",
 	startTime,
 	endTime,
+	startDate,
+	endDate,
 	timezone,
 	calendar,
 	location,
@@ -201,6 +207,15 @@ export function buildCreateEventPayload({
 	now,
 	rrule = null,
 }: BuildEventPayloadInput): CreateEventPayload {
+	if (startDate !== undefined || endDate !== undefined) {
+		if (!startDate || !endDate || startTime !== null || endTime !== null)
+			throw new Error(
+				"All-day event payloads require both civil dates and null timed fields",
+			);
+		allDaySpan(startDate, addCivilDays(endDate, 1));
+	} else if (!startTime || !endTime) {
+		throw new Error("Timed event payloads require start and end instants");
+	}
 	const content: Record<string, unknown> = { sendUpdates };
 	if (location?.trim()) content.location = location.trim();
 	const timestamp = now ?? new Date().toISOString();
@@ -226,8 +241,8 @@ export function buildCreateEventPayload({
 		origin_calendar_id: calendar.origin_id ?? null,
 		original_start_time: null,
 		original_start_date: null,
-		start_date: null,
-		end_date: null,
+		start_date: startDate ?? null,
+		end_date: endDate ?? null,
 		end_datetime_tz: null,
 		origin_updated_at: null,
 		etag: null,
@@ -280,26 +295,29 @@ async function resolveDescription(
 	}
 }
 
-async function resolveProjectId(
+export async function resolveProjectId(
 	projectName: string | undefined,
 	dryRun = false,
 ) {
 	if (!projectName) return undefined;
 
 	const client = createClient();
-	const labelsResponse = dryRun
-		? { data: await mutationReader(true)(client, "labels") }
-		: await client.getLabels();
-	const label = labelsResponse.data.find(
-		(l) => l.title.toLowerCase() === projectName.toLowerCase(),
+	const labels = (
+		dryRun
+			? await mutationReader(true)(client, "labels")
+			: await fetchProjects(client)
+	).filter((label) => !label.deleted_at);
+	const exact = labels.find((label) => label.id === projectName);
+	if (exact) return exact.id;
+	const matches = labels.filter(
+		(label) => label.title.toLowerCase() === projectName.toLowerCase(),
 	);
-
-	if (!label) {
-		console.error(`Error: Project "${projectName}" not found`);
-		process.exit(1);
-	}
-
-	return label.id;
+	if (matches.length > 1)
+		throw new Error(
+			`Ambiguous project title "${projectName}"; use an explicit project ID`,
+		);
+	if (!matches[0]) throw new Error(`Project "${projectName}" not found`);
+	return matches[0].id;
 }
 
 function failCalendarResolution(error: unknown): never {
@@ -700,7 +718,8 @@ export const createSlotCommand = defineCommand({
 export const createEventCommand = defineCommand({
 	meta: {
 		name: "create",
-		description: "Create a timed Google calendar event through Akiflow",
+		description:
+			"Create a timed or all-day Google calendar event through Akiflow",
 	},
 	args: {
 		...dryRunArgs,
@@ -715,17 +734,24 @@ export const createEventCommand = defineCommand({
 			required: true,
 			alias: "d",
 		},
+		"all-day": {
+			type: "boolean",
+			description: "Create a date-only event; excludes --at/--duration/--fold",
+		},
+		"end-date": {
+			type: "string",
+			description:
+				"Exclusive end date for --all-day; defaults to the following date",
+		},
 		at: {
 			type: "string",
-			description: "Local start time (e.g., '09:30')",
-			required: true,
+			description: "Local start time (required for timed events)",
 		},
 		timezone: timezoneArg,
 		fold: foldArg,
 		duration: {
 			type: "string",
-			description: "Event duration (e.g., '30m', '1h')",
-			required: true,
+			description: "Event duration (required for timed events)",
 		},
 		calendar: {
 			type: "string",
@@ -779,7 +805,7 @@ export const createEventCommand = defineCommand({
 			args["description-file"] as string | undefined,
 		);
 		const location = (args.location as string | undefined)?.trim();
-		const timezone = await resolveCreateTimezone(args, date);
+		let timezone = await resolveCreateTimezone(args, date);
 		const fold = resolveFold(args);
 
 		if (!date) {
@@ -801,15 +827,40 @@ export const createEventCommand = defineCommand({
 			}
 		}
 
-		const durationSeconds = parseDurationToSeconds(durationInput);
-		if (durationSeconds <= 0) {
-			console.error("Error: Duration must be greater than zero");
+		const isAllDay = args["all-day"] === true;
+		let startTime: string | null = null;
+		let endTime: string | null = null;
+		let span: { start_date: string; end_date: string } | undefined;
+		try {
+			if (isAllDay) {
+				if (
+					args.at !== undefined ||
+					args.duration !== undefined ||
+					args.fold !== undefined
+				)
+					throw new Error(
+						"--all-day cannot be combined with --at, --duration or --fold",
+					);
+				span = allDaySpan(date, args["end-date"] as string | undefined);
+			} else {
+				if (args["end-date"] !== undefined)
+					throw new Error("--end-date requires --all-day");
+				if (!at || !durationInput)
+					throw new Error("Timed events require --at and --duration");
+				const durationSeconds = parseDurationToSeconds(durationInput);
+				if (durationSeconds <= 0)
+					throw new Error("Duration must be greater than zero");
+				startTime = resolveTime(date, at, timezone, fold);
+				endTime = new Date(
+					Date.parse(startTime) + durationSeconds * 1000,
+				).toISOString();
+			}
+		} catch (error) {
+			console.error(
+				`Error: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			process.exit(2);
 		}
-		const startTime = resolveTime(date, at, timezone, fold);
-		const endTime = new Date(
-			new Date(startTime).getTime() + durationSeconds * 1000,
-		).toISOString();
 		let calendar: Calendar;
 		try {
 			calendar = args["dry-run"]
@@ -824,11 +875,17 @@ export const createEventCommand = defineCommand({
 				failCalendarResolution(error);
 			throw error;
 		}
+		if (isAllDay && args.timezone === undefined && calendar.timezone) {
+			timezone = validateTimezone(calendar.timezone);
+		}
+
 		const eventPayload = buildCreateEventPayload({
 			title,
 			description,
 			startTime,
 			endTime,
+			startDate: span?.start_date,
+			endDate: span ? addCivilDays(span.end_date, -1) : undefined,
 			timezone,
 			calendar,
 			location,
@@ -842,13 +899,13 @@ export const createEventCommand = defineCommand({
 			if (normalizedRrule) {
 				const preview = previewOccurrences(
 					normalizedRrule,
-					new Date(startTime),
-					timezone,
+					new Date(startTime ?? `${date}T00:00:00Z`),
+					isAllDay ? "UTC" : timezone,
 					5,
 				);
 				console.error("Recurrence preview (first 5 occurrences):");
 				for (const occurrence of preview.occurrences) {
-					console.error(`  ${occurrence}`);
+					console.error(`  ${isAllDay ? occurrence.slice(0, 10) : occurrence}`);
 				}
 			}
 			printDryRun(
@@ -877,7 +934,8 @@ export const createEventCommand = defineCommand({
 			});
 		}
 		const verification =
-			receipt?.status === "accepted" && args.verify === true
+			(receipt?.status === "accepted" || receipt?.status === "pending") &&
+			args.verify === true
 				? await verifyEventFields(
 						client,
 						receipt.event_id,
@@ -885,6 +943,17 @@ export const createEventCommand = defineCommand({
 						verificationOptions(),
 					)
 				: null;
+		if (receipt?.status === "pending" && verification?.status === "verified") {
+			await recordCreatedEvent({
+				event_id: operation.event_id,
+				created_at: new Date().toISOString(),
+				provenance: {
+					title: eventPayload.title,
+					calendar_id: eventPayload.calendar_id,
+				},
+			});
+		}
+
 		if (
 			verification?.observed &&
 			(verification.status === "verified" ||

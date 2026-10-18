@@ -1,6 +1,6 @@
 # Recurrence, calendar review, and provider reconciliation
 
-This describes the local audited build `0.3.6-audit.1` (upstream base `1ff76ab` plus recorded local fixes).
+Use the current feature build; check `af --version` and the installation provenance for its source commit.
 
 ## Recurrence capability boundaries
 
@@ -9,13 +9,25 @@ Distinguish series operations from per-instance writes:
 | Operation | Installed behavior |
 | --- | --- |
 | Read recurring/all-day events | Calendar occurrence reads expand cached series and preserve materialized exceptions |
-| Create a timed Google RRULE event | `event create --rrule` builds a recurrence payload and previews up to five occurrences |
+| Create a timed or all-day Google RRULE event | `event create --rrule` builds a recurrence payload and previews up to five occurrences |
 | Update/delete a recurring series | Explicit --scope series and series master ID; foreign deletion requires --confirm |
 | Change attendees on recurring events | Refused by the attendee command |
-| `--scope instance` Google fallback | Adapter is a stub; setting `AF_GOOGLE_ACCESS_TOKEN` does not enable real writes |
+| Update/delete one recurring occurrence | Native v5 exception operation with `--scope instance`; original anchor required; no external Google token |
+| Create/update/delete all-day events | Date-only flags; CLI end date is exclusive and Akiflow stored end is inclusive |
 | `event delete --scope series --truncate-before YYYY-MM-DD` | Submits a recurrence-only patch ending before that local day; preserves exclusions and finite bounds; foreign target requires --confirm |
 
-Interpret series receipts as submitted until verified. Use an authorized provider UI/tool for per-instance writes; do not attempt to enable unfinished capability flags.
+Interpret accepted/pending receipts as submitted until verified. `--verify` confirms fresh Akiflow state and native instance cancellations, not Google propagation. Do not replay an uncertain operation to verify it.
+
+```bash
+af event create "Away" --all-day --date 2026-11-01 --end-date 2026-11-03 --verify --json --no-envelope
+af event update <master-uuid> --scope instance --instance-anchor 2026-11-07T09:00:00-08:00 --at 10:00 --duration 45m --verify --json --no-envelope
+af event delete <master-uuid> --scope instance --instance-anchor 2026-11-07T09:00:00-08:00 --confirm --verify --json --no-envelope
+af event update <all-day-master-uuid> --scope instance --instance-anchor 2026-11-11 --date 2026-11-12 --verify --json --no-envelope
+```
+
+The anchor is the original start, including when an instance has moved. Real materialized instance IDs supply their observed original anchor; unmaterialized occurrences require the series master UUID and explicit anchor. The CLI checks fresh series/account/calendar identity and recurrence membership, uses Akiflow's official stable occurrence UUID contract, and submits an anchored native operation. It refuses ambiguous exceptions, cancelled/hidden targets, excluded anchors and unsupported recurrence expansion. Only the selected occurrence changes; it never loops over siblings. For materialized all-day exceptions, deletion uses the fresh observed provider-backed Akiflow exception UUID directly: live acceptance found that the service acknowledged anchored deletes of moved all-day exceptions without applying them to Google. The direct route was verified against the provider with siblings intact. Unmaterialized all-day occurrences use the native original-date/parent route. The route is chosen before submission; failed or uncertain operations are never automatically replayed. Foreign instance deletion requires `--confirm` even if its master was originally created by the CLI.
+
+All-day `--end-date` is exclusive. Omit it for one day on create or to retain the existing civil-day length on a move. All-day dates belong to their selected calendar. The service may canonicalize stored event timezone to null; all-day update rejects --timezone because it does not change the civil-date span. No implicit timed/all-day conversion is supported. A date-only recurrence preview displays civil dates.
 
 For authorized recurring creation, first preview a bounded rule:
 

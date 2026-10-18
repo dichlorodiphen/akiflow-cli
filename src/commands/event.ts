@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { defineCommand } from "citty";
+import { addCivilDays, moveAllDaySpan } from "../lib/all-day";
 import { createClient } from "../lib/api/client";
 import {
 	buildDeleteEventOperation,
@@ -34,11 +35,14 @@ import {
 	loadCreatedEventIds,
 } from "../lib/event-creation-journal";
 import { outputMutation } from "../lib/mutation-output";
-import {
-	editRecurrenceInstance,
-	getCapabilities,
-} from "../lib/providers/router";
 import { truncateSeriesUntil } from "../lib/recurrence";
+import { isRecurringEventMaster } from "../lib/recurrence-expansion";
+import {
+	buildInstanceDelete,
+	buildInstancePatch,
+	type RecurrenceInstance,
+	resolveRecurrenceInstance,
+} from "../lib/recurrence-instance";
 import {
 	formatInTimezone,
 	parseCalendarDate,
@@ -50,6 +54,7 @@ import {
 	type VerificationResult,
 	verifyEventDeleted,
 	verifyEventFields,
+	verifyEventInstanceDeleted,
 } from "../lib/verification";
 import { verificationOptions, verifyFlag } from "../lib/verify-flag";
 import { createEventCommand } from "./create";
@@ -179,6 +184,7 @@ export function resolveCachedEvent(events: Event[], identifier: string): Event {
 export function validateMutableTimedGoogleEvent(
 	event: Event,
 	allowRecurring = false,
+	allowAllDay = false,
 ): void {
 	// Central target rejection (cancelled/deleted/read-only/hidden) with
 	// precise reasons; the v1 capability limits below are CLI-specific.
@@ -190,10 +196,8 @@ export function validateMutableTimedGoogleEvent(
 		);
 	}
 	if (
-		event.start_date ||
-		event.end_date ||
-		!event.start_time ||
-		!event.end_time
+		!allowAllDay &&
+		(event.start_date || event.end_date || !event.start_time || !event.end_time)
 	) {
 		fail(`Event "${event.id}" is all-day or missing timed start/end fields`);
 	}
@@ -244,6 +248,14 @@ function eventOperationBase(event: Event): Record<string, unknown> {
 	}
 
 	return base;
+}
+
+function scopedEventOperationRoute(event: Event, scope: string | null) {
+	return eventOperationRoute(
+		scope === "series" && isRecurringEventMaster(event)
+			? { ...event, hidden: false }
+			: event,
+	);
 }
 
 export interface BuildEventUpdatePayloadInput {
@@ -424,7 +436,7 @@ export function buildAttendeePatchIntent({
 export const eventUpdateCommand = defineCommand({
 	meta: {
 		name: "update",
-		description: "Update timing and basic fields for a timed Google event",
+		description: "Update timing and basic fields for a Google event",
 	},
 	args: {
 		...dryRunArgs,
@@ -438,6 +450,15 @@ export const eventUpdateCommand = defineCommand({
 			description: "Event date (YYYY-MM-DD or natural language)",
 			alias: "d",
 		},
+		"all-day": {
+			type: "boolean",
+			description:
+				"Explicitly retain date-only event timing; never converts a timed event",
+		},
+		"end-date": {
+			type: "string",
+			description: "Exclusive end date for an existing all-day event",
+		},
 		at: {
 			type: "string",
 			description: "Local start time (e.g., '09:30')",
@@ -445,7 +466,7 @@ export const eventUpdateCommand = defineCommand({
 		timezone: {
 			type: "string",
 			description:
-				"IANA timezone for interpreting --date/--at. Defaults to the event's existing timezone, then profile, then local.",
+				"Timed events only: IANA timezone for --date/--at; defaults to existing event zone, then profile, then local. All-day dates use their calendar.",
 		},
 		fold: {
 			type: "string",
@@ -479,12 +500,12 @@ export const eventUpdateCommand = defineCommand({
 		scope: {
 			type: "string",
 			description:
-				"Recurrence scope: 'series' edits the series master, 'instance' edits a single occurrence (requires --instance-anchor or a resolved instance; uses Google fallback)",
+				"Recurrence scope: 'series' edits the series master, 'instance' edits a single occurrence (requires --instance-anchor or a resolved instance; uses native Akiflow exception operations)",
 		},
 		"instance-anchor": {
 			type: "string",
 			description:
-				"Original start time of the instance to edit (ISO instant). Defaults to the resolved event's original_start_time. Never uses current start_time.",
+				"Original anchor of the instance (ISO instant or all-day YYYY-MM-DD). Defaults to the resolved event's original_start_time. Never uses current start_time.",
 		},
 		verify: verifyFlag,
 		json: {
@@ -516,8 +537,18 @@ export const eventUpdateCommand = defineCommand({
 			process.exit(2);
 		}
 
-		const event = resolveCachedEvent(events, args.id as string);
-		validateMutableTimedGoogleEvent(event, scope !== null);
+		let event = resolveCachedEvent(events, args.id as string);
+		let instance: RecurrenceInstance | undefined;
+		// The official client marks every recurring parent hidden on sync.
+		// Explicit recurring scope resolves through that structural master;
+		// the actual occurrence retains its independent hidden/lifecycle guard.
+		validateMutableTimedGoogleEvent(
+			scope !== null && isRecurringEventMaster(event)
+				? { ...event, hidden: false }
+				: event,
+			scope !== null,
+			true,
+		);
 
 		if (
 			scope === "series" &&
@@ -539,61 +570,17 @@ export const eventUpdateCommand = defineCommand({
 			!!event.recurring_id ||
 			!!event.original_start_time;
 		if (scope === "instance") {
-			// Per-instance edits route through the provider layer. The anchor is
-			// ALWAYS original_start_time — never the (mutable) current start_time.
-			const anchor =
-				(args["instance-anchor"] as string | undefined)?.trim() ||
-				event.original_start_time;
-			if (!anchor) {
-				console.error(
-					"Error: --scope instance requires an occurrence anchor. Provide --instance-anchor or resolve an instance with original_start_time.",
+			try {
+				instance = resolveRecurrenceInstance(
+					event,
+					events,
+					(args["instance-anchor"] as string | undefined)?.trim(),
 				);
-				process.exit(2);
+				event = instance.event;
+				validateMutableTimedGoogleEvent(event, true, true);
+			} catch (error) {
+				fail(error instanceof Error ? error.message : String(error), 2);
 			}
-			if (args["dry-run"]) {
-				console.log(
-					JSON.stringify(
-						{
-							scope: "instance",
-							anchor_original_start_time: anchor,
-							note: "Dry run: would route to provider fallback (Google) with sendUpdates=none. Akiflow sync would be reported as pending.",
-						},
-						null,
-						2,
-					),
-				);
-				return;
-			}
-			const outcome = await editRecurrenceInstance(
-				event,
-				anchor,
-				{
-					title: args.title as string | undefined,
-					description: args.description as string | undefined,
-					location: args.location as string | undefined,
-				},
-				getCapabilities(),
-			);
-			if (!outcome.ok) {
-				console.error(
-					`Error: Instance edit refused (${outcome.reason})${outcome.detail ? `: ${outcome.detail}` : ""}`,
-				);
-				process.exit(3);
-			}
-			console.log(
-				JSON.stringify(
-					{
-						scope: "instance",
-						provider: outcome.result.provider,
-						provider_event_id: outcome.result.providerEventId,
-						verified: outcome.result.verified,
-						akiflow_sync: outcome.result.akiflowSync,
-					},
-					null,
-					2,
-				),
-			);
-			return;
 		}
 		if (isRecurring && !scope) {
 			// Safe default: require explicit scope for recurring events to avoid
@@ -603,6 +590,116 @@ export const eventUpdateCommand = defineCommand({
 			);
 			process.exit(2);
 		}
+
+		if (event.start_date != null || event.end_date != null) {
+			if (
+				!event.start_date ||
+				!event.end_date ||
+				event.start_time ||
+				event.end_time
+			)
+				fail("All-day event has inconsistent observed date/time fields", 2);
+			if (
+				args.at !== undefined ||
+				args.duration !== undefined ||
+				args.fold !== undefined
+			)
+				fail(
+					"All-day updates do not accept --at, --duration or --fold; implicit conversion is refused",
+					2,
+				);
+			if (args.timezone !== undefined)
+				fail(
+					"All-day events use civil dates in their calendar; --timezone is only supported for timed event updates",
+					2,
+				);
+			const changes: Record<string, unknown> = {};
+			if (args.title !== undefined) changes.title = args.title;
+			if (
+				args.description !== undefined ||
+				args["description-file"] !== undefined
+			)
+				changes.description = await resolveDescription(
+					args.description as string | undefined,
+					args["description-file"] as string | undefined,
+					event.description,
+				);
+			if (args.location !== undefined)
+				changes.location = String(args.location).trim() || null;
+			try {
+				if (args.date !== undefined || args["end-date"] !== undefined) {
+					const span = moveAllDaySpan(
+						event.start_date,
+						addCivilDays(event.end_date, 1),
+						args.date ? resolveDateInput(String(args.date)) : undefined,
+						args["end-date"] as string | undefined,
+					);
+					Object.assign(changes, {
+						start_date: span.start_date,
+						end_date: addCivilDays(span.end_date, -1),
+					});
+				}
+			} catch (error) {
+				fail(error instanceof Error ? error.message : String(error), 2);
+			}
+			if (!Object.keys(changes).length)
+				fail("No changes provided for event update", 2);
+			if (args["dry-run"]) {
+				printDryRun(
+					[previewItem(event, { ...event, ...changes }, sendUpdates)],
+					args.json === true,
+				);
+				return;
+			}
+			const observedBase = {
+				...eventOperationBase(event),
+				start_date: event.start_date,
+				end_date: event.end_date,
+			};
+			const base = Object.fromEntries(
+				Object.entries(observedBase).filter(([key]) =>
+					Object.hasOwn(changes, key),
+				),
+			);
+			const response = await client.submitEventOperations([
+				instance
+					? buildInstancePatch(instance, base, changes, sendUpdates)
+					: buildPatchEventOperation(
+							scopedEventOperationRoute(event, scope),
+							base,
+							changes,
+							sendUpdates,
+						),
+			]);
+			const verifications = new Map<string, VerificationResult<Event>>();
+			if (
+				["accepted", "pending"].includes(response.receipts[0]?.status ?? "") &&
+				args.verify === true
+			) {
+				const verification = await verifyEventFields(
+					client,
+					event.id,
+					changes,
+					verificationOptions(),
+				);
+				verifications.set(event.id, verification);
+				if (verification.status === "verified" && verification.observed)
+					await upsertResourceRecords("events", [verification.observed]);
+			}
+			outputMutation({
+				command: "event update",
+				json: args.json === true,
+				receipts: response.receipts,
+				verifications,
+				result: verifications.get(event.id)?.observed ?? null,
+			});
+			return;
+		}
+		if (args["all-day"] === true || args["end-date"] !== undefined)
+			fail(
+				"Date-only flags require an existing all-day event; implicit conversion is refused",
+				2,
+			);
 
 		// Resolve the effective timezone for this update.
 		// Precedence: explicit --timezone > event's existing zone > profile > local.
@@ -743,16 +840,21 @@ export const eventUpdateCommand = defineCommand({
 			),
 		);
 		// Explicit patch intent: kind is fixed, never inferred from payload fields.
-		const operation = buildPatchEventOperation(
-			eventOperationRoute(event),
-			base,
-			changes,
-			sendUpdates,
-		);
+		const operation = instance
+			? buildInstancePatch(instance, base, changes, sendUpdates)
+			: buildPatchEventOperation(
+					scopedEventOperationRoute(event, scope),
+					base,
+					changes,
+					sendUpdates,
+				);
 		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
 		const verifications = new Map<string, VerificationResult<Event>>();
-		if (receipt?.status === "accepted" && args.verify === true) {
+		if (
+			["accepted", "pending"].includes(receipt?.status ?? "") &&
+			args.verify === true
+		) {
 			const verification = await verifyEventFields(
 				client,
 				event.id,
@@ -809,7 +911,7 @@ export const eventUpdateCommand = defineCommand({
 export const eventDeleteCommand = defineCommand({
 	meta: {
 		name: "delete",
-		description: "Soft-delete a timed Google calendar event",
+		description: "Delete a Google calendar event",
 	},
 	args: {
 		...dryRunArgs,
@@ -830,7 +932,12 @@ export const eventDeleteCommand = defineCommand({
 		scope: {
 			type: "string",
 			description:
-				"Recurrence scope: 'series' truncates/deletes the series master (never loops instances), 'instance' deletes a single occurrence via Google fallback",
+				"Recurrence scope: 'series' truncates/deletes the series master (never loops instances), 'instance' deletes a single occurrence through a native Akiflow exception",
+		},
+		"instance-anchor": {
+			type: "string",
+			description:
+				"Original occurrence anchor (explicit-offset ISO instant or all-day YYYY-MM-DD)",
 		},
 		"truncate-before": {
 			type: "string",
@@ -848,6 +955,7 @@ export const eventDeleteCommand = defineCommand({
 		rejectVirtualEventId(args.id as string);
 		const client = createClient();
 		const sendUpdates = resolveSendUpdatesFlag(args["send-updates"]);
+		if (!args["dry-run"]) await refreshResource(client, "events");
 
 		const events = await mutationReader(args["dry-run"] === true)(
 			client,
@@ -865,8 +973,18 @@ export const eventDeleteCommand = defineCommand({
 			process.exit(2);
 		}
 
-		const event = resolveCachedEvent(events, args.id as string);
-		validateMutableTimedGoogleEvent(event, scope !== null);
+		let event = resolveCachedEvent(events, args.id as string);
+		let instance: RecurrenceInstance | undefined;
+		// The official client marks every recurring parent hidden on sync.
+		// Explicit recurring scope resolves through that structural master;
+		// the actual occurrence retains its independent hidden/lifecycle guard.
+		validateMutableTimedGoogleEvent(
+			scope !== null && isRecurringEventMaster(event)
+				? { ...event, hidden: false }
+				: event,
+			scope !== null,
+			true,
+		);
 
 		if (
 			scope === "series" &&
@@ -886,10 +1004,17 @@ export const eventDeleteCommand = defineCommand({
 				? event.recurrence.length > 0
 				: !!event.recurrence) || !!event.recurring_id;
 		if (scope === "instance") {
-			console.error(
-				"Error: --scope instance delete is not yet implemented. Use the Google fallback adapter directly once configured.",
-			);
-			process.exit(3);
+			try {
+				instance = resolveRecurrenceInstance(
+					event,
+					events,
+					(args["instance-anchor"] as string | undefined)?.trim(),
+				);
+				event = instance.event;
+				validateMutableTimedGoogleEvent(event, true, true);
+			} catch (error) {
+				fail(error instanceof Error ? error.message : String(error), 2);
+			}
 		}
 		const truncateBefore = (
 			args["truncate-before"] as string | undefined
@@ -902,17 +1027,15 @@ export const eventDeleteCommand = defineCommand({
 			let recurrence: string[];
 			try {
 				parseCalendarDate(truncateBefore);
-				const boundary = zonedTimeToUtc(
-					truncateBefore,
-					0,
-					0,
-					event.start_datetime_tz || getLocalTimezone(),
-				);
+				const seriesZone = event.start_date
+					? "UTC"
+					: event.start_datetime_tz || getLocalTimezone();
+				const boundary = zonedTimeToUtc(truncateBefore, 0, 0, seriesZone);
 				recurrence = truncateSeriesUntil(
 					Array.isArray(event.recurrence) ? event.recurrence : null,
 					new Date(Date.parse(boundary) - 1000),
-					new Date(event.start_time!),
-					event.start_datetime_tz || getLocalTimezone(),
+					new Date(event.start_time ?? `${event.start_date}T00:00:00Z`),
+					seriesZone,
 				);
 			} catch (error) {
 				fail(error instanceof Error ? error.message : String(error), 2);
@@ -932,14 +1055,17 @@ export const eventDeleteCommand = defineCommand({
 					`Event "${event.id}" was not created by this CLI. Re-run with --confirm to truncate its future occurrences.`,
 				);
 			const operation = buildPatchEventOperation(
-				eventOperationRoute(event),
+				scopedEventOperationRoute(event, scope),
 				{ recurrence: event.recurrence },
 				{ recurrence },
 				sendUpdates,
 			);
 			const response = await client.submitEventOperations([operation]);
 			const verifications = new Map<string, VerificationResult<Event>>();
-			if (args.verify === true && response.receipts[0]?.status === "accepted") {
+			if (
+				args.verify === true &&
+				["accepted", "pending"].includes(response.receipts[0]?.status ?? "")
+			) {
 				const verification = await verifyEventFields(
 					client,
 					event.id,
@@ -996,22 +1122,29 @@ export const eventDeleteCommand = defineCommand({
 		}
 		// Explicit delete intent: the operation kind is fixed here, never
 		// inferred from the payload's status/deleted_at fields.
-		const operation = buildDeleteEventOperation(
-			eventOperationRoute(event),
-			sendUpdates,
-		);
+		const operation = instance
+			? buildInstanceDelete(instance, sendUpdates)
+			: buildDeleteEventOperation(
+					scopedEventOperationRoute(event, scope),
+					sendUpdates,
+				);
 		const response = await client.submitEventOperations([operation]);
 		const receipt = response.receipts[0];
 		if (receipt && receipt.status === "accepted") {
 			await clearCreatedEvent(event.id);
 		}
 		const verifications = new Map<string, VerificationResult<Event>>();
-		if (receipt?.status === "accepted" && args.verify === true) {
-			const verification = await verifyEventDeleted(
-				client,
-				event.id,
-				verificationOptions(),
-			);
+		if (
+			["accepted", "pending"].includes(receipt?.status ?? "") &&
+			args.verify === true
+		) {
+			const verification = instance
+				? await verifyEventInstanceDeleted(
+						client,
+						instance,
+						verificationOptions(),
+					)
+				: await verifyEventDeleted(client, event.id, verificationOptions());
 			if (isReadOnlyCanonical(verification.observed)) {
 				verification.status = "mismatch";
 				verification.differingFields = [
@@ -1124,7 +1257,10 @@ async function runAttendeeCommand(
 	const response = await client.submitEventOperations([operation]);
 	const receipts = response.receipts;
 	const verifications = new Map<string, VerificationResult<Event>>();
-	if (args.verify === true && receipts[0]?.status === "accepted") {
+	if (
+		args.verify === true &&
+		["accepted", "pending"].includes(receipts[0]?.status ?? "")
+	) {
 		const verification = await verifyEventAttendees(
 			client,
 			event.id,
@@ -1236,7 +1372,7 @@ const eventAttendeesCommand = defineCommand({
 export const eventCommand = defineCommand({
 	meta: {
 		name: "event",
-		description: "Manage timed Google calendar events through Akiflow",
+		description: "Manage Google calendar events through Akiflow",
 	},
 	subCommands: {
 		create: createEventCommand,

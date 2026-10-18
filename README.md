@@ -8,7 +8,7 @@ This repository adapts [code-yeongyu/akiflow-cli](https://github.com/code-yeongy
 
 - **Resource-first commands** - `af task`, `af event`, `af slot`, `af batch`, `af calendar`, `af project`, `af cal`
 - **Task management** - list, create, complete, update, plan, snooze, delete
-- **Calendar events** - create/update/delete timed Google events through Akiflow's v5 event operations
+- **Calendar events** - create/update/delete timed and all-day Google events, including individual recurring occurrences, through Akiflow's v5 event operations
 - **Task slots** - list, show, create, update, and delete true Akiflow task slots with linked tasks
 - **Batch operations** - dry-run-first bulk attendee, event delete, and slot delete workflows
 - **Conversion** - convert scheduled task blocks into Google Calendar events
@@ -69,6 +69,11 @@ af event create "Meeting" --date 2026-06-20 --at 13:00 --duration 30m \
 af event update <event-id> --date 2026-06-20 --at 14:30 --duration 45m \
   --title "Updated meeting" --description-file details.txt
 
+af event create "Away" --all-day --date 2026-06-20 --end-date 2026-06-23 --verify
+af event update <all-day-event-id> --date 2026-06-21 --verify
+af event update <series-master-id> --scope instance --instance-anchor 2026-06-21T09:00:00-07:00 --title "This occurrence" --verify
+af event delete <series-master-id> --scope instance --instance-anchor 2026-06-21T09:00:00-07:00 --confirm --verify
+
 af event delete <event-id>
 af event delete <event-id> --send-updates none
 af event delete <event-id> --confirm   # required when the event was not created by this CLI
@@ -77,7 +82,11 @@ af event attendees add <event-id> julia@example.com alex@example.com
 af event attendees remove <event-id> julia@example.com
 ```
 
-Events support timed writable Google records through Akiflow's asynchronous v5 operations. Recurring creation uses `--rrule`; series edits/deletes require `--scope series` and the master ID. `--truncate-before YYYY-MM-DD` cuts off future series occurrences before that local day. Per-instance edits/deletes, all-day writes, reminders, and conferencing remain unsupported. Attendee add/remove use v5 patches. Guest notifications default to silent (`--send-updates none`); use `--send-updates all` to notify. Deleting or truncating an event this CLI did not create requires `--confirm`. An accepted receipt establishes submission, not provider application; use `--verify` for fresh Akiflow field confirmation.
+Events support writable timed and all-day Google records through Akiflow's asynchronous v5 operations. For all-day creation, use `--all-day --date YYYY-MM-DD`; optional `--end-date` is **exclusive** (defaults to the following day). All-day updates preserve the civil-day span when moving `--date`. All-day dates belong to their selected calendar; updates reject `--timezone`. Timed/all-day conversion is refused; all-day events do not accept `--at`, `--duration`, or `--fold`.
+
+Recurring creation uses `--rrule`; series edits/deletes require `--scope series` and the master ID. `--truncate-before YYYY-MM-DD` cuts off future series occurrences before that local day. To edit/delete one occurrence, use `--scope instance` with the master UUID and `--instance-anchor` (the original explicit-offset ISO start, or `YYYY-MM-DD` for all-day). A materialized instance UUID supplies its original anchor automatically. Moved occurrences retain their original anchor. Native Akiflow exception operations preserve siblings; no separate Google credentials are required. Synthetic `virtual:...` read IDs remain invalid mutation inputs.
+
+Attendee add/remove support timed, non-recurring events. Guest notifications default to silent (`--send-updates none`); use `--send-updates all` to notify. Deleting or truncating an event this CLI did not create requires `--confirm`. Accepted/pending receipts establish submission; `--verify` performs bounded fresh Akiflow field/cancellation confirmation without replay. Provider propagation is asynchronous and needs separate provider inspection when it matters. Reminders and conferencing creation remain unsupported.
 
 ### Batch Operations
 

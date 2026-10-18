@@ -119,6 +119,35 @@ describe("fresh event verification", () => {
 		).toBe("verified");
 		expect(scans).toBe(2);
 	});
+	it("accepts empty-description provider canonicalization but not missing or nonempty fields", async () => {
+		for (const actual of [null, ""]) {
+			const fake = transport(() => page([{ ...event, description: actual }]));
+			expect(
+				(
+					await verifyEventFields(
+						fake.client,
+						event.id,
+						{ description: "" },
+						bounds,
+					)
+				).status,
+			).toBe("verified");
+		}
+		for (const actual of [undefined, "not empty"]) {
+			const fake = transport(() => page([{ ...event, description: actual }]));
+			expect(
+				(
+					await verifyEventFields(
+						fake.client,
+						event.id,
+						{ description: "" },
+						bounds,
+					)
+				).status,
+			).toBe("mismatch");
+		}
+	});
+
 	it("reports each requested difference including exact zone strings", async () => {
 		for (const [field, value] of Object.entries({
 			title: "Other",
@@ -352,4 +381,90 @@ it("creation verification rejects a missing or changed requested recurrence", as
 			})
 		).status,
 	).toBe("verified");
+});
+
+describe("native recurring cancellation verification", () => {
+	it("requires parent/account/calendar/connector/original-anchor identity on cancelled rows", async () => {
+		const { verifyEventInstanceDeleted } = await import(
+			"../../lib/verification"
+		);
+		const parent = {
+			id: "master",
+			calendar_id: "calendar",
+			akiflow_account_id: "account",
+			connector_id: "google",
+		} as import("../../lib/api/types").Event;
+		const instance = {
+			event: { id: "instance" } as import("../../lib/api/types").Event,
+			parent,
+			anchor: "2026-11-07T17:00:00.000Z",
+			allDay: false,
+		};
+		const cancelled = {
+			id: "instance",
+			recurring_id: "master",
+			calendar_id: "calendar",
+			akiflow_account_id: "account",
+			connector_id: "google",
+			original_start_time: "2026-11-07T17:00:00+00:00",
+			status: "cancelled",
+			deleted_at: null,
+		};
+		const fake = transport(() => page([cancelled]));
+		expect(
+			(await verifyEventInstanceDeleted(fake.client, instance, bounds)).status,
+		).toBe("verified");
+		for (const [field, value] of Object.entries({
+			recurring_id: "other",
+			calendar_id: "other",
+			akiflow_account_id: "other",
+			connector_id: "other",
+			original_start_time: "2026-11-07T18:00:00Z",
+			status: "confirmed",
+		})) {
+			const wrong = transport(() => page([{ ...cancelled, [field]: value }]));
+			expect(
+				(
+					await verifyEventInstanceDeleted(wrong.client, instance, {
+						...bounds,
+						singlePoll: true,
+					})
+				).status,
+			).not.toBe("verified");
+		}
+	});
+	it("accepts all-day cancellation without inventing an instant anchor", async () => {
+		const { verifyEventInstanceDeleted } = await import(
+			"../../lib/verification"
+		);
+		const parent = {
+			id: "master",
+			calendar_id: "calendar",
+			akiflow_account_id: "account",
+			connector_id: "google",
+		} as import("../../lib/api/types").Event;
+		const instance = {
+			event: { id: "instance" } as import("../../lib/api/types").Event,
+			parent,
+			anchor: "2026-11-07",
+			allDay: true,
+		};
+		const fake = transport(() =>
+			page([
+				{
+					id: "instance",
+					recurring_id: "master",
+					calendar_id: "calendar",
+					akiflow_account_id: "account",
+					connector_id: "google",
+					original_start_date: "2026-11-07",
+					deleted_at: null,
+					status: "cancelled",
+				},
+			]),
+		);
+		expect(
+			(await verifyEventInstanceDeleted(fake.client, instance, bounds)).status,
+		).toBe("verified");
+	});
 });
