@@ -201,8 +201,6 @@ export function buildInstanceDelete(
 		// Select this route before submission; never retry a prior operation.
 		const { event, parent, anchor } = instance;
 		if (
-			!event.origin_id ||
-			event.recurrence_exception !== true ||
 			event.recurring_id !== parent.id ||
 			event.original_start_date !== anchor ||
 			event.calendar_id !== parent.calendar_id ||
@@ -212,7 +210,19 @@ export function buildInstanceDelete(
 			throw new Error(
 				"Materialized all-day deletion requires a fresh provider-backed exception and exact parent/account/calendar/original-date identity",
 			);
-		return operation;
+		if (event.recurrence_exception === true) {
+			if (!event.origin_id)
+				throw new Error(
+					"Materialized all-day deletion requires a fresh provider-backed exception",
+				);
+			return operation;
+		}
+		if (event.start_date !== anchor)
+			throw new Error(
+				"Materialized all-day occurrence has moved without an observed exception marker; refresh before deleting",
+			);
+		// An ordinary observed occurrence is not an exception: retain the
+		// official original-date/parent route, also used for virtual instances.
 	}
 	Object.assign(operation.payload, instancePayload(instance));
 	return operation;

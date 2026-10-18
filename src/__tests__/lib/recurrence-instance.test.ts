@@ -215,6 +215,46 @@ describe("native recurring occurrence identity", () => {
 			).toThrow("Materialized all-day");
 	});
 
+	test("ordinary observed all-day occurrences retain the official anchored delete route", () => {
+		const parent = {
+			...master(),
+			start_time: null,
+			end_time: null,
+			start_date: "2026-10-20",
+			end_date: "2026-10-21",
+		};
+		const child = event({
+			...parent,
+			id: "ordinary-observed",
+			recurring_id: parent.id,
+			recurrence: null,
+			origin_id: "provider-instance",
+			recurrence_exception: false,
+			original_start_date: "2026-10-21",
+			start_date: "2026-10-21",
+			end_date: "2026-10-22",
+		});
+		const result = resolveRecurrenceInstance(
+			parent,
+			[parent, child],
+			"2026-10-21",
+		);
+		expect(result.materialized).toBe(true);
+		const operation = buildInstanceDelete(result, "none");
+		expect(operation.event_id).toBe(child.id);
+		expect(operation.payload).toEqual({
+			send_updates: false,
+			parent_event_id: parent.id,
+			original_start_date: "2026-10-21",
+		});
+		expect(() =>
+			buildInstanceDelete(
+				{ ...result, event: { ...child, start_date: "2026-10-25" } },
+				"none",
+			),
+		).toThrow("without an observed exception marker");
+	});
+
 	test("all-day anchors use the inclusive Akiflow span and date payload", () => {
 		const parent = {
 			...master(),
