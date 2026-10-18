@@ -19,8 +19,6 @@ jobs:
         timezone: [UTC, America/Los_Angeles]
     env:
       TZ: ${{ matrix.timezone }}
-      AF_CONFIG_DIR: ${{ runner.temp }}/af-ci-config
-      AF_CACHE_DIR: ${{ runner.temp }}/af-ci-cache
       AF_API_BASE: http://127.0.0.1:1
       AF_REFRESH_URL: http://127.0.0.1:1/oauth/refreshToken
       AF_NO_AUTO_SYNC: "1"
@@ -30,6 +28,11 @@ jobs:
         with:
           # Matches the Bun version used for local verification.
           bun-version: "1.3.14"
+      - name: Isolate CLI config and cache
+        shell: bash
+        run: |
+          echo "AF_CONFIG_DIR=$RUNNER_TEMP/af-ci-config" >> "$GITHUB_ENV"
+          echo "AF_CACHE_DIR=$RUNNER_TEMP/af-ci-cache" >> "$GITHUB_ENV"
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Typecheck
