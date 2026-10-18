@@ -66,7 +66,7 @@ Reconciliation compares fresh Akiflow events/calendars, fresh Google events, and
 
 Exactly one day-selector family is allowed. Today is default; ranges require both endpoints, include the entire `--to` day, and are limited to 31 local calendar days. Timezone precedence is explicit `--timezone` > profile `timezone` > host. All-day events participate in presence comparisons. Date windows are half-open UTC bounds derived from selected local days.
 
-Without `--calendar`, the private fork compares `dichlorodiphen@gmail.com` and `david.young@databricks.com`. Explicit calendar selection replaces both defaults and resolves against fresh Akiflow metadata by ID, Google origin ID, or unique title. An explicitly selected hidden calendar is auditable; deleted calendars are excluded.
+Without `--calendar`, the private fork compares `dichlorodiphen@gmail.com`. Explicit calendar selection replaces this default and resolves against fresh Akiflow metadata by ID, Google origin ID, or unique title. An explicitly selected hidden calendar is auditable; deleted calendars are excluded.
 
 Google helper precedence is `--google-cmd`, `HATCH_GWS_CLI`, then `hatch_gws_cli` on PATH. An override is one executable name/path, not a shell command. The helper must support:
 

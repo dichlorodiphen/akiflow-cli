@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
+import { tokenUserId } from "../lib/auth/identity";
 import { loadCredentials } from "../lib/auth/storage";
 import { type BrowserType, getAllBrowserPaths } from "../lib/browser-paths";
 import { readAllRecords } from "../lib/cache/jsonl-store";
@@ -153,28 +154,14 @@ async function checkCredentials(): Promise<DoctorReport["credentials"]> {
 			has_refresh_token: false,
 		};
 	}
-	const payload = decodeJwt(creds.token);
 	return {
 		has_creds: true,
-		user_id: payload?.user_id ?? null,
+		user_id: tokenUserId(creds.token),
 		expires_at: creds.expiryTimestamp
 			? new Date(creds.expiryTimestamp).toISOString()
 			: null,
 		has_refresh_token: !!creds.refreshToken,
 	};
-}
-
-function decodeJwt(token: string): { user_id?: number; exp?: number } | null {
-	try {
-		const parts = token.split(".");
-		if (parts.length < 2 || !parts[1]) return null;
-		return JSON.parse(Buffer.from(parts[1], "base64").toString("utf8")) as {
-			user_id?: number;
-			exp?: number;
-		};
-	} catch {
-		return null;
-	}
 }
 
 function checkBrowsers(): BrowserReport[] {

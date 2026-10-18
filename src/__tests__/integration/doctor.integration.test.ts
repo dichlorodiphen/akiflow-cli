@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { FakeAkiflowServer } from "./helpers/fake-server";
 import { loadAllFixtures } from "./helpers/load-fixtures";
 import { spawnCli } from "./helpers/spawn-cli";
@@ -20,6 +21,10 @@ afterEach(async () => {
 
 describe("af doctor (BDD)", () => {
 	test("--json emits a structured report with all top-level keys", async () => {
+		// Real OAuth access tokens carry a decimal string subject, not user_id.
+		const credentials = JSON.parse(readFileSync(env.credentialsPath, "utf8"));
+		credentials.token = `header.${Buffer.from(JSON.stringify({ sub: "42", exp: 4102444800 })).toString("base64url")}.signature`;
+		writeFileSync(env.credentialsPath, JSON.stringify(credentials));
 		const result = await spawnCli(["doctor", "--json"], { env: env.env });
 		expect(result.exitCode).toBe(0);
 		const report = JSON.parse(result.stdout);

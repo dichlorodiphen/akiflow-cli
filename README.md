@@ -219,8 +219,7 @@ af reconcile --date 2026-09-30 --timezone America/Los_Angeles
 af reconcile --from 2026-09-28 --to 2026-09-30 --calendar Personal --json
 ```
 
-The default calendars are `dichlorodiphen@gmail.com` and
-`david.young@databricks.com`; `--calendar` replaces them. Google requires the
+The default calendar is `dichlorodiphen@gmail.com`; `--calendar` replaces it. Google requires the
 schedule watcher's `hatch_gws_cli`, or a compatible executable selected with
 `--google-cmd` or `HATCH_GWS_CLI`. Its OAuth behavior must be verified separately
 before treating a live invocation as read-only. See [the command reference](docs/COMMANDS.md#af-reconcile)

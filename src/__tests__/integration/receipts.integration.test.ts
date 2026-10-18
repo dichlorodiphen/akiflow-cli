@@ -99,7 +99,7 @@ describe("truthful receipts (BDD)", () => {
 		lifecycle.delayReads = 1;
 		const result = await run([...create, "--verify"]);
 		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toContain("Verified:");
+		expect(result.stdout).toContain("Verified in Akiflow:");
 		expect(posts()).toHaveLength(1);
 	});
 	test("never-applied operation times out without success", async () => {

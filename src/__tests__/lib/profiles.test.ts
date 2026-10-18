@@ -230,8 +230,8 @@ test("identity binding refuses credential replacement, mismatched cache and manu
 test("real OAuth numeric string sub is recognized without treating arbitrary subjects as identities", () => {
 	const token = (value: unknown) =>
 		`header.${Buffer.from(JSON.stringify(value)).toString("base64url")}.signature`;
-	expect(tokenUserId(token({ sub: "278040", resource: "*" }))).toBe(278040);
-	for (const sub of ["", "278040junk", "1.2", "-1", "9007199254740993", 278040])
+	expect(tokenUserId(token({ sub: "424242", resource: "*" }))).toBe(424242);
+	for (const sub of ["", "424242junk", "1.2", "-1", "9007199254740993", 424242])
 		expect(tokenUserId(token({ sub }))).toBeNull();
 });
 
